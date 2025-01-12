@@ -8,7 +8,9 @@ The initial phase involves generating a dataset of the first N primes and their 
 
 These features encompass:
 
-Factor Analysis: For the composite numbers residing within each gap, the code analyzes their prime factorization. Features include the total number of prime factors, the number of unique prime factors, the maximum and minimum prime factors, the mean and standard deviation of the factors, the density of factors (total factors divided by the gap size), and the Shannon entropy of the factor distribution. 
+Factor Analysis: For the composite numbers residing within each gap, the code analyzes their prime factorization. 
+
+Features include the total number of prime factors, the number of unique prime factors, the maximum and minimum prime factors, the mean and standard deviation of the factors, the density of factors (total factors divided by the gap size), and the Shannon entropy of the factor distribution. 
 
 Additionally, the square root of each factor is used to derive further features, such as the mean, sum, and standard deviation of the square roots.
 
