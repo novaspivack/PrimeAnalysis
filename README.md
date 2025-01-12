@@ -1,4 +1,4 @@
-Advanced Machine Learning and Analytics for Prime Number Distributions
+Advanced Machine Learning and Analytics for Prime Gap Distribution Investigation
 
 This code conducts a comprehensive investigation into the properties and patterns of prime gaps, leveraging a combination of data analysis, feature engineering, machine learning, and advanced mathematical techniques. The primary objective is to discern underlying structures and predictive indicators within the seemingly random distribution of prime gaps.
 
