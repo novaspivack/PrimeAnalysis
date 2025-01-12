@@ -81,9 +81,8 @@ N_TEST_RANGES = 5 # Number of ranges to test the model on
 TEST_RANGE_SIZE = None # Size of each test range. If None it will be calculated automatically
 TRANSFER_LEARNING_ENABLED = True # Enable or disable transfer learning
 
-N = 100000 # Number of primes to analyze
-N_i = 1000  # Number integers to analyze; optional setting, not implemented yet, that can be used instead of number of primes if an approach needs this setting
-COMPOSITE_SAMPLE_RATE = .1  # Default 1.0 for 100% for full analysis
+N = 10000 # Number of primes to analyze. NOTE: This should be 100000 or more for full analysis but that is computationally expensive. This code uses multiprocessing on the Mac.
+COMPOSITE_SAMPLE_RATE = 0.1  # Default 1.0 for 100% for full analysis; set to 0.1 for 10% for testing
 
 # add other settings here if needed; e.g. which ML models to run, or settings related to the analysis and amount of computation to do etc. Making the system more configurable will be beneficial especially if we start doing analysis that could be computationally intensive so that we can test with lower computation and then when the system is working we can increase to full computation which might take longer to run. These could represented as configuration settings here.
 
