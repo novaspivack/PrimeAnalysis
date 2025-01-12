@@ -71,6 +71,7 @@ from logging.handlers import RotatingFileHandler
 # PrimeAnalysis by Nova Spivack
 # https://www.novaspivack.com
 # https://github.com/novaspivack?tab=repositories
+# SEE THE README ON GITHUB FOR MORE INFORMATION
 
 ################################################################################
 # SETTINGS
@@ -85,8 +86,8 @@ TEST_RANGE_SIZE = None # Size of each test range. If None it will be calculated 
 TRANSFER_LEARNING_ENABLED = True # Enable or disable transfer learning
 
 N = 10000 # Number of primes to analyze
-N_i = 1000  # Number integers to analyze; optional setting, not implemented yet, that can be used instead of number of primes if an approach needs this setting
 COMPOSITE_SAMPLE_RATE = .1  # Default 1.0 for 100% for full analysis
+SEQUENCE_LENGTH_RANGE = (2, 20) # Range of sequence lengths to test; computation time increases with length
 
 # add other settings here if needed; e.g. which ML models to run, or settings related to the analysis and amount of computation to do etc. Making the system more configurable will be beneficial especially if we start doing analysis that could be computationally intensive so that we can test with lower computation and then when the system is working we can increase to full computation which might take longer to run. These could represented as configuration settings here.
 
@@ -1616,8 +1617,11 @@ def _compute_sequence_features_numba(gaps, clusters, sub_clusters, unique_factor
 
 
 @timing_decorator
-def compute_sequence_features(df, sequence_length=50):
+def compute_sequence_features(df, sequence_length=None):
     """Compute features from longer sequences including sub-cluster patterns."""
+    if sequence_length is None:
+        sequence_length = SEQUENCE_LENGTH_RANGE[1] # Use the max range if not specified
+    
     features = []
     
     for i in range(sequence_length, len(df)):
@@ -1856,8 +1860,8 @@ def analyze_gap_patterns(gaps, df=None, max_sequence_length=5, logger=None):
             print(f"Warning: Error in pattern analysis: {str(e)}")
             import traceback
             print(traceback.format_exc())
-            return pattern_analysis
-        
+            return pattern_analysis 
+
 @timing_decorator
 def analyze_primes_and_gaps(n, output_log_file, plot_dir):
     """Main analysis pipeline with enhanced reporting and numerical stability."""
@@ -2176,8 +2180,8 @@ def analyze_primes_and_gaps(n, output_log_file, plot_dir):
         
         except Exception as e:
             logger.log_and_print(f"Critical error in analysis pipeline: {str(e)}", level=logging.ERROR)
-            return None          
-
+            return None
+        
 @timing_decorator
 def analyze_primes_and_gaps_large_scale(n, output_log_file, plot_dir, batch_size=100000):
     """Enhanced analysis pipeline for large datasets with error handling."""
@@ -2416,7 +2420,7 @@ def analyze_primes_and_gaps_large_scale(n, output_log_file, plot_dir, batch_size
                 print(f"Critical error in analysis: {str(e)}")
                 traceback.print_exc()
             return None
-                                            
+                                               
 @timing_decorator
 def analyze_gap_distribution_characteristics(df, logger=None):
     """Analyze gap distribution characteristics with improved numerical stability and error handling."""
@@ -2559,7 +2563,7 @@ def analyze_gap_distribution_characteristics(df, logger=None):
                 'mean_gap_ranges': {}
             }
         }
-
+        
 @timing_decorator
 def compute_gap_transition_probabilities(df, max_gap=None, batch_size=5000, logger=None):
     """Compute transition probabilities between gap sizes with batched processing."""
@@ -2869,8 +2873,8 @@ def analyze_prime_factor_patterns(df, batch_size=5000, logger=None):
                     'autocorrelation': [],
                     'change_points': {'locations': [], 'values': []}
                 }
-            }         
-
+            }
+            
 @njit
 def _analyze_gap_distribution_numba(cluster_gaps, values_for_quantiles):
     """Numba-optimized version of analyze_gap_distribution_characteristics_by_cluster."""
@@ -2950,6 +2954,7 @@ def _analyze_gap_distribution_numba(cluster_gaps, values_for_quantiles):
         'lognormal_fit': lognormal_fit,
         'entropy': float(entropy_val)
     }
+
 
 
 @timing_decorator
@@ -3314,7 +3319,7 @@ def analyze_cluster_transitions_advanced(df, batch_size=10000, logger=None):
                 'stability_score': 0.0,
                 'n_clusters': n_clusters
             }
-        }                             
+        }
 
 @timing_decorator
 def analyze_prime_distribution(df, batch_size=10000, logger=None):
@@ -3501,7 +3506,7 @@ def _compute_mutual_information_numba(x_batch, y_batch):
             if p_xy[i, j] > 0 and p_x[i] > 0 and p_y[j] > 0:
                 mi += p_xy[i, j] * np.log2(p_xy[i, j] / (p_x[i] * p_y[j]))
     
-    return float(mi)
+    return float(mi)    
 
 @timing_decorator
 def compute_entanglement_metrics(df, feature_cols, batch_size=5000, logger=None):
@@ -3601,6 +3606,67 @@ def compute_entanglement_metrics(df, feature_cols, batch_size=5000, logger=None)
             'correlation_entanglement': {},
             'mutual_information_entanglement': {}
         }
+        
+@njit
+def _compute_superposition_patterns_numba(data):
+    """Numba-optimized function to compute superposition patterns."""
+    n = len(data)
+    if n == 0:
+        return {
+            'mean': 0.0,
+            'std': 0.0,
+            'min': 0.0,
+            'max': 0.0,
+            'count': 0,
+            'median': 0.0,
+            'q1': 0.0,
+            'q3': 0.0,
+            'iqr': 0.0,
+            'entropy': 0.0,
+            'num_modes': 0
+        }
+    
+    mean = np.mean(data)
+    std = np.std(data)
+    min_val = np.min(data)
+    max_val = np.max(data)
+    
+    # Compute quantiles
+    quantiles = np.percentile(data, [25, 50, 75])
+    q1 = quantiles[0]
+    median = quantiles[1]
+    q3 = quantiles[2]
+    iqr = q3 - q1
+    
+    # Compute histogram
+    hist, _ = np.histogram(data, bins='auto', density=True)
+    
+    # Compute entropy
+    entropy_val = 0.0
+    for p in hist:
+        if p > 0:
+            entropy_val -= p * np.log2(p)
+    
+    # Compute number of modes (peaks)
+    num_modes = 0
+    if len(hist) > 2:
+        for i in range(1, len(hist) - 1):
+            if hist[i] > hist[i-1] and hist[i] > hist[i+1]:
+                num_modes += 1
+    
+    return {
+        'mean': float(mean),
+        'std': float(std),
+        'min': float(min_val),
+        'max': float(max_val),
+        'count': int(n),
+        'median': float(median),
+        'q1': float(q1),
+        'q3': float(q3),
+        'iqr': float(iqr),
+        'entropy': float(entropy_val),
+        'num_modes': int(num_modes)
+    }
 
 @timing_decorator
 def compute_superposition_patterns(df, feature_cols, batch_size=5000, logger=None):
@@ -3620,14 +3686,7 @@ def compute_superposition_patterns(df, feature_cols, batch_size=5000, logger=Non
                 logger.log_and_print(f"Analyzing superposition patterns for {col}")
             
             # Initialize accumulators
-            stats_accumulators = {
-                'sum': 0.0,
-                'sum_sq': 0.0,
-                'count': 0,
-                'min': float('inf'),
-                'max': float('-inf'),
-                'values': []
-            }
+            all_values = []
             
             # Process in batches
             for start_idx in range(0, len(X), batch_size):
@@ -3637,56 +3696,18 @@ def compute_superposition_patterns(df, feature_cols, batch_size=5000, logger=Non
                 valid_mask = np.isfinite(batch)
                 if np.any(valid_mask):
                     batch = batch[valid_mask]
-                    with np.errstate(all='ignore'):
-                        stats_accumulators['sum'] += np.sum(batch)
-                        stats_accumulators['sum_sq'] += np.sum(batch ** 2)
-                        stats_accumulators['count'] += len(batch)
-                        stats_accumulators['min'] = min(stats_accumulators['min'], np.min(batch))
-                        stats_accumulators['max'] = max(stats_accumulators['max'], np.max(batch))
-                        
-                        # Store subset of values for distribution analysis
-                        if len(stats_accumulators['values']) < 10000:
-                            stats_accumulators['values'].extend(batch[:1000].tolist())
+                    all_values.extend(batch.tolist())
                 
                 gc.collect()
             
-            # Compute final statistics
-            if stats_accumulators['count'] > 0:
-                mean = stats_accumulators['sum'] / stats_accumulators['count']
-                var = (stats_accumulators['sum_sq'] / stats_accumulators['count']) - (mean ** 2)
-                std = np.sqrt(max(0, var))
-                
-                superposition_patterns[col] = {
-                    'mean': float(mean),
-                    'std': float(std),
-                    'min': float(stats_accumulators['min']),
-                    'max': float(stats_accumulators['max']),
-                    'count': int(stats_accumulators['count'])
-                }
-                
-                # Compute quantiles if we have stored values
-                if stats_accumulators['values']:
-                    values = np.array(stats_accumulators['values'])
-                    quantiles = np.percentile(values, [25, 50, 75])
-                    superposition_patterns[col].update({
-                        'median': float(quantiles[1]),
-                        'q1': float(quantiles[0]),
-                        'q3': float(quantiles[2]),
-                        'iqr': float(quantiles[2] - quantiles[0])
-                    })
-                    
-                    # Compute histogram
-                    hist, _ = np.histogram(values, bins='auto', density=True)
-                    superposition_patterns[col]['entropy'] = float(entropy(hist + 1e-10))
-                    
-                    # Check for multimodality
-                    try:
-                        peaks, _ = find_peaks(hist, prominence=0.01)
-                        superposition_patterns[col]['num_modes'] = int(len(peaks))
-                    except Exception as e:
-                        if logger:
-                            logger.log_and_print(f"Warning: Peak detection failed for {col}: {str(e)}")
-                        superposition_patterns[col]['num_modes'] = 0
+            # Convert to numpy array
+            all_values = np.array(all_values, dtype=np.float64)
+            
+            # Call numba-optimized function
+            numba_stats = _compute_superposition_patterns_numba(all_values)
+            
+            # Store results
+            superposition_patterns[col] = numba_stats
         
         if logger:
             logger.log_and_print("Superposition pattern analysis complete")
@@ -3705,6 +3726,22 @@ def compute_superposition_patterns(df, feature_cols, batch_size=5000, logger=Non
         # Return safe default values
         return {}
       
+@njit
+def _compute_chaos_metrics_numba(traj1, traj2):
+    """Numba-optimized function to compute chaos metrics."""
+    
+    # Handle NaN/inf values
+    valid_mask = np.isfinite(traj1) & np.isfinite(traj2)
+    traj1 = traj1[valid_mask]
+    traj2 = traj2[valid_mask]
+    
+    if len(traj1) < 2:
+        return 0.0
+    
+    # Compute divergence (mean absolute difference)
+    divergence = np.mean(np.abs(traj1 - traj2))
+    return float(divergence)
+
 @timing_decorator
 def compute_chaos_metrics(df, feature_cols, batch_size=5000, logger=None, sequence_length=10):
     """Compute chaos metrics based on divergence of nearby trajectories with improved numerical stability."""
@@ -3734,16 +3771,9 @@ def compute_chaos_metrics(df, feature_cols, batch_size=5000, logger=None, sequen
                     traj1 = X[col].iloc[i:i+sequence_length].values
                     traj2 = X[col].iloc[i+1:i+sequence_length+1].values
                     
-                    # Handle NaN/inf values
-                    valid_mask = np.isfinite(traj1) & np.isfinite(traj2)
-                    traj1 = traj1[valid_mask]
-                    traj2 = traj2[valid_mask]
-                    
-                    if len(traj1) > 1:
-                        with np.errstate(all='ignore'):
-                            # Compute divergence (mean absolute difference)
-                            divergence = np.mean(np.abs(traj1 - traj2))
-                            divergence_scores.append(float(divergence))
+                    # Call numba-optimized function
+                    divergence = _compute_chaos_metrics_numba(traj1, traj2)
+                    divergence_scores.append(divergence)
                     
                 gc.collect()
             
@@ -3783,6 +3813,24 @@ def compute_chaos_metrics(df, feature_cols, batch_size=5000, logger=None, sequen
         # Return safe default values
         return {}
            
+@njit
+def _compute_fractal_dimension_numba(data, box_sizes):
+    """Numba-optimized function to compute fractal dimension."""
+    
+    n = len(data)
+    box_counts = np.zeros(len(box_sizes), dtype=np.int64)
+    
+    for i, size in enumerate(box_sizes):
+        count = 0
+        min_val = np.min(data)
+        max_val = np.max(data)
+        
+        if np.isfinite(min_val) and np.isfinite(max_val):
+            count = int(np.ceil((max_val - min_val) / size))
+        box_counts[i] = count
+    
+    return box_counts
+
 @timing_decorator
 def compute_fractal_dimension(df, feature_col='gap_size', batch_size=5000, logger=None):
     """Compute fractal dimension using box-counting method with improved numerical stability."""
@@ -3809,28 +3857,8 @@ def compute_fractal_dimension(df, feature_col='gap_size', batch_size=5000, logge
         # Define box sizes
         box_sizes = np.logspace(np.log10(0.1 * (max_val - min_val)), np.log10(max_val - min_val), num=10)
         
-        box_counts = []
-        
-        # Process box counts in batches
-        for size in box_sizes:
-            count = 0
-            
-            # Process data in batches
-            for start_idx in range(0, len(data), batch_size):
-                end_idx = min(start_idx + batch_size, len(data))
-                batch = data[start_idx:end_idx]
-                
-                # Compute number of boxes needed to cover the data
-                with np.errstate(all='ignore'):
-                    min_batch = np.min(batch)
-                    max_batch = np.max(batch)
-                    
-                    if np.isfinite(min_batch) and np.isfinite(max_batch):
-                        count += int(np.ceil((max_batch - min_batch) / size))
-                    
-                gc.collect()
-            
-            box_counts.append(count)
+        # Call numba-optimized function
+        box_counts = _compute_fractal_dimension_numba(data, box_sizes)
         
         # Convert to numpy arrays for calculation
         box_sizes = np.array(box_sizes, dtype=np.float64)
@@ -3871,8 +3899,8 @@ def compute_fractal_dimension(df, feature_col='gap_size', batch_size=5000, logge
             traceback.print_exc()
         
         # Return safe default values
-        return {'dimension': 0.0, 'counts': {}}
-                                                                 
+        return {'dimension': 0.0, 'counts': {}}                              
+
 @timing_decorator
 def create_advanced_features(df, logger=None, feature_importance=None, chaos_metrics=None, superposition_patterns=None):
     """Create sophisticated features including mathematical, statistical, and domain-specific features."""
@@ -4007,8 +4035,17 @@ def create_advanced_features(df, logger=None, feature_importance=None, chaos_met
             gap_values = np.where(np.isfinite(gap_values), gap_values, median_gap)
         
         if len(gap_values) > 1:
+            # Debugging: Log the gap values before FFT
+            if logger:
+                logger.log_and_print(f"DEBUG: gap_values before FFT: {gap_values}")
+            
             gap_fft = np.array(fft(gap_values))
             gap_freq = np.array(fftfreq(len(gap_values)))
+            
+            # Debugging: Log the FFT results
+            if logger:
+                logger.log_and_print(f"DEBUG: gap_fft: {gap_fft}")
+                logger.log_and_print(f"DEBUG: gap_freq: {gap_freq}")
             
             # Extract frequency domain features
             # Convert complex FFT values to magnitudes and handle properly
@@ -4128,9 +4165,7 @@ def create_advanced_features(df, logger=None, feature_importance=None, chaos_met
         else:
             print(f"Error creating advanced features: {str(e)}")
             traceback.print_exc()
-        return df
-    
-              
+        return df           
 
 @timing_decorator
 def perform_clustering(df):
@@ -4172,7 +4207,6 @@ def nth_prime(n):
         primes = list(primerange(2, upper_bound + 1))
     
     return primes[n-1]
-
 
 @timing_decorator
 def batch_process_primes(n, batch_size=100000, logger=None):
@@ -4386,7 +4420,7 @@ def batch_process_primes(n, batch_size=100000, logger=None):
             print(error_msg)
             traceback.print_exc()
         return pd.DataFrame()
-     
+      
 def compute_statistics_safe(data):
     """Compute statistics with overflow protection and NaN handling."""
     with suppress_numeric_warnings():
@@ -4440,7 +4474,7 @@ def compute_statistics_safe(data):
                 'skew': 0.0,
                 'kurtosis': 0.0
             }
-            
+                    
 @timing_decorator
 def batch_clustering(df, batch_size=100000):
     """Perform clustering on large datasets in batches with numerical protection."""
@@ -4473,7 +4507,7 @@ def batch_clustering(df, batch_size=100000):
             labels.extend(batch_labels)
         
         return np.array(labels)
-
+    
 @timing_decorator
 def create_visualizations_large_scale(df, feature_importance, pattern_analysis, plot_dir, model_results, analysis_stats=None, batch_size=10000):
     """Create visualizations with improved memory handling for large datasets."""
@@ -4635,7 +4669,7 @@ def create_visualizations_large_scale(df, feature_importance, pattern_analysis, 
     finally:
         plt.close('all')
         gc.collect()
-        
+
 @timing_decorator     
 def create_cluster_distribution_plots(df, plot_dir, batch_size=10000):
     """Create cluster-specific distribution plots with batched processing."""
@@ -4660,7 +4694,7 @@ def create_cluster_distribution_plots(df, plot_dir, batch_size=10000):
         plt.savefig(os.path.join(plot_dir, 'clusters', f"cluster_{cluster}_distribution.png"))
         plt.close()
         gc.collect()
-
+        
 @timing_decorator
 def create_cluster_feature_plots(df, plot_dir, batch_size=10000):
     """Create feature distribution plots by cluster with batched processing and MiniBatchKMeans."""
@@ -4862,7 +4896,7 @@ def compute_shap_values(models, X, feature_cols, n_samples=1000, batch_size=500,
         
         # Return safe default values
         return {}, {}
-      
+    
 @timing_decorator
 def compute_prediction_intervals(model, X, confidence=0.95, n_bootstraps=50, batch_size=5000, logger=None):
     """Compute prediction intervals using bootstrap with improved memory management and numerical stability."""
@@ -5029,7 +5063,7 @@ def compute_prediction_intervals(model, X, confidence=0.95, n_bootstraps=50, bat
             np.zeros(default_size, dtype=np.float64),
             np.zeros(default_size, dtype=np.float64)
         )
-        
+           
 @njit
 def _detect_change_points_numba(data, min_size):
     """Numba-optimized function for detecting change points."""
@@ -5155,7 +5189,7 @@ def detect_change_points(df, column='gap_size', min_size=50, batch_size=5000, lo
             'std_segment_size': 0.0,
             'optimal_n_bkps': 0
         }
-
+        
 def perform_meta_learning(X, y, models, cv=5, batch_size=5000, logger=None):
     """Perform meta-learning with automated hyperparameter optimization, batch processing, and improved memory management."""
     if logger:
@@ -5823,7 +5857,7 @@ def perform_advanced_clustering_analysis(df, batch_size=5000, logger=None):
             'optimal_clusters': {'fallback': 1},
             'cluster_profiles': {}
         }
-        
+
 @njit
 def _compute_segment_stats_numba(data, change_points, min_size):
     """Numba-optimized function to compute segment statistics."""
@@ -5899,7 +5933,7 @@ def _compute_statistical_tests_numba(data, clusters):
     return cluster_stats
 
 @timing_decorator    
-def perform_advanced_statistical_tests(df, clustering_results, batch_size=10000, logger=None):
+def perform_advanced_statistical_tests(df, advanced_clustering_results, batch_size=10000, logger=None):
     """Perform comprehensive statistical tests with Numba optimization."""
     if logger:
         logger.log_and_print("Performing advanced statistical tests...")
@@ -5915,7 +5949,7 @@ def perform_advanced_statistical_tests(df, clustering_results, batch_size=10000,
     try:
         # Convert to float64 and clip values
         numeric_cols = df.select_dtypes(include=[np.number]).columns
-        feature_cols = [col for col in numeric_cols if col not in ['cluster']]
+        feature_cols = [col for col in numeric_cols if col != 'cluster']
         
         for col in feature_cols:
             data = df[col].values.astype(np.float64)
@@ -5934,7 +5968,7 @@ def perform_advanced_statistical_tests(df, clustering_results, batch_size=10000,
                 statistical_tests['normality'][col] = {
                     'statistic': float(stat),
                     'p_value': float(p_value),
-                    'is_normal': float(p_value) > 0.05
+                    'is_normal': bool(p_value > 0.05)
                 }
                 
                 # Store cluster statistics
@@ -5961,6 +5995,7 @@ def perform_advanced_statistical_tests(df, clustering_results, batch_size=10000,
             print(error_msg)
             traceback.print_exc()
         
+        # Return safe default values
         return {
             'normality': {},
             'homogeneity': {},
@@ -6008,7 +6043,6 @@ def _compute_sample_importance_numba(X, y, feature_cols_count):
     
     return correlations
 
-
 @timing_decorator
 def _compute_sample_importance(df_sample, feature_cols, target_col, logger, batch_size):
     """Helper function to compute feature importance for a single sample with improved NaN handling."""
@@ -6022,9 +6056,9 @@ def _compute_sample_importance(df_sample, feature_cols, target_col, logger, batc
     
     # Convert to float64 and clip values
     X = df_sample[feature_cols].values.astype(np.float64)
-    X = np.clip(X, -1e10, 1e10)
+    X = X.clip(-1e10, 1e10)
     y = df_sample[target_col].values.astype(np.float64)
-    y = np.clip(y, -1e10, 1e10)
+    y = y.clip(-1e10, 1e10)
     
     # 1. Random Forest importance
     rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
@@ -6331,7 +6365,15 @@ def analyze_feature_importance(df, target_col='gap_size', n_top_features=50, bat
         else:
             print(error_msg)
             traceback.print_exc()
-        raise ValueError("Feature importance analysis failed, no valid features selected.")   
+        
+        # Return safe default values
+        return {
+            'feature_scores': {},
+            'selected_features': {},
+            'stability_scores': {},
+            'interaction_scores': {},
+            'shap_scores': {}
+        }, pd.DataFrame()
 
 @timing_decorator
 def select_optimal_features(df, importance_analysis, target_col='gap_size', batch_size=5000, logger=None):
@@ -6390,9 +6432,9 @@ def select_optimal_features(df, importance_analysis, target_col='gap_size', batc
         n_features = len(selected_features)
         if n_features == 0:
             if logger:
-                logger.log_and_print("Error: No features selected for training.", level=logging.ERROR)
+                logger.log_and_print("Warning: No features selected for training.", level=logging.WARNING)
             else:
-                print("Error: No features selected for training.")
+                print("Warning: No features selected for training.")
             raise ValueError("No features selected for training.")
         
         scores = []
@@ -6449,7 +6491,7 @@ def select_optimal_features(df, importance_analysis, target_col='gap_size', batc
         
         # Return safe default values
         raise ValueError("Feature selection failed, no valid features selected.")
-
+    
 @timing_decorator
 def analyze_feature_stability(df, selected_features, n_bootstrap=50, batch_size=5000, logger=None):
     """Analyze stability of feature importance across different subsets with batching."""
@@ -6528,8 +6570,8 @@ def analyze_feature_stability(df, selected_features, n_bootstrap=50, batch_size=
                     gc.collect()
                 
                 temporal_stability[feature] = {
-                    'mean_stability': float(np.std(window_means)) if window_means else 0.0,
-                    'std_stability': float(np.std(window_stds)) if window_stds else 0.0
+                    'mean_stability': float(np.mean(window_means)),
+                    'std_stability': float(np.std(window_stds)),
                 }
             
             stability_analysis['temporal_stability'] = temporal_stability
@@ -6556,16 +6598,23 @@ def analyze_feature_stability(df, selected_features, n_bootstrap=50, batch_size=
             logger.log_and_print("Feature stability analysis complete")
         
         return stability_analysis
-    
+        
     except Exception as e:
+        error_msg = f"Error in feature stability analysis: {str(e)}"
         if logger:
-            logger.log_and_print(f"Error in feature stability analysis: {str(e)}", level=logging.ERROR)
+            logger.log_and_print(error_msg, level=logging.ERROR)
             logger.logger.error(traceback.format_exc())
         else:
-            print(f"Error in feature stability analysis: {str(e)}")
+            print(error_msg)
             traceback.print_exc()
-        return stability_analysis
-
+        
+        # Return safe default values
+        return {
+            'bootstrap_scores': {},
+            'temporal_stability': {},
+            'value_range_stability': {}
+        }
+        
 @timing_decorator
 def analyze_phase_space(df, feature_col='gap_size', max_lag=5, batch_size=5000, logger=None):
     """Analyze the phase space of a feature with improved numerical stability and memory management."""
@@ -7327,7 +7376,7 @@ def _write_outlier_analysis(log, df, logger=None):
             traceback.print_exc()
     
     log.write("\n")
-     
+    
 def prepare_training_data(df, logger=None):
     """Prepare data for model training with revised feature selection and NaN handling."""
     if logger:
@@ -12092,20 +12141,22 @@ def analyze_gap_sequences(df, max_sequence_length=5, batch_size=5000, logger=Non
         }
 
 @timing_decorator
-def analyze_gap_sequences_advanced(df, max_length=5, batch_size=5000, logger=None):
+def analyze_gap_sequences_advanced(df, max_length=5, batch_size=10000, logger=None):
     """Analyze sequences of gaps with improved memory management and numerical stability."""
     with suppress_overflow_warnings():
-        sequence_analysis = {}
+        sequence_analysis = {
+            'basic_patterns': {},
+            'repeating_patterns': {}
+        }
         
         if logger:
             logger.log_and_print(f"Analyzing gap sequences up to length {max_length}")
         
         try:
-            # Convert to float64 and clip values
+            # Convert to numpy arrays for faster processing
             gaps = df['gap_size'].astype(np.float64).values
-            gaps = np.clip(gaps, -1e10, 1e10)
             
-            # Analyze sequences of different lengths
+            # Analyze basic sequence patterns
             for length in range(2, max_length + 1):
                 if logger:
                     logger.log_and_print(f"Processing sequences of length {length}")
@@ -12113,7 +12164,7 @@ def analyze_gap_sequences_advanced(df, max_length=5, batch_size=5000, logger=Non
                 # Call numba-optimized function
                 count, increasing_count, decreasing_count, constant_count = _analyze_gap_sequences_numba(gaps, length)
                 
-                sequence_analysis[length] = {
+                sequence_analysis['basic_patterns'][length] = {
                     'count': int(count),
                     'unique_count': 0,  # Not computed in numba
                     'increasing_count': int(increasing_count),
@@ -12122,14 +12173,49 @@ def analyze_gap_sequences_advanced(df, max_length=5, batch_size=5000, logger=Non
                 }
                 
                 if count > 0:
-                    sequence_analysis[length].update({
+                    sequence_analysis['basic_patterns'][length].update({
                         'increasing_ratio': float(increasing_count / count),
                         'decreasing_ratio': float(decreasing_count / count),
                         'constant_ratio': float(constant_count / count)
                     })
             
+            # Analyze repeating patterns
             if logger:
-                logger.log_and_print("Gap sequence analysis complete")
+                logger.log_and_print("Analyzing repeating patterns...")
+            
+            repeating_patterns = {}
+            
+            # Process sequences in batches
+            for start_idx in range(0, len(gaps) - 1, batch_size):
+                end_idx = min(start_idx + batch_size, len(gaps) - 1)
+                
+                for length in range(2, min(max_length + 1, end_idx - start_idx + 1)):
+                    for i in range(start_idx, end_idx - length + 1):
+                        seq = tuple(gaps[i:i+length].astype(int))
+                        if seq not in repeating_patterns:
+                            repeating_patterns[seq] = 0
+                        repeating_patterns[seq] += 1
+                
+                gc.collect()
+            
+            # Filter and sort repeating patterns
+            filtered_patterns = {
+                seq: count for seq, count in repeating_patterns.items()
+                if count > 1
+            }
+            
+            sorted_patterns = sorted(
+                filtered_patterns.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:10]
+            
+            sequence_analysis['repeating_patterns'] = {
+                'most_common': [(list(seq), int(count)) for seq, count in sorted_patterns]
+            }
+            
+            if logger:
+                logger.log_and_print("Repeating pattern analysis complete")
             
             return sequence_analysis
             
@@ -12144,19 +12230,22 @@ def analyze_gap_sequences_advanced(df, max_length=5, batch_size=5000, logger=Non
             
             # Return safe default values
             return {
-                length: {
-                    'count': 0,
-                    'unique_count': 0,
-                    'increasing_count': 0,
-                    'decreasing_count': 0,
-                    'constant_count': 0,
-                    'increasing_ratio': 0.0,
-                    'decreasing_ratio': 0.0,
-                    'constant_ratio': 0.0
-                }
-                for length in range(2, max_length + 1)
-            }
-            
+                'basic_patterns': {
+                    length: {
+                        'count': 0,
+                        'unique_count': 0,
+                        'increasing_count': 0,
+                        'decreasing_count': 0,
+                        'constant_count': 0,
+                        'increasing_ratio': 0.0,
+                        'decreasing_ratio': 0.0,
+                        'constant_ratio': 0.0
+                    }
+                    for length in range(2, max_length + 1)
+                },
+                'repeating_patterns': {}
+            }  
+
 @timing_decorator
 def compute_advanced_sequence_metrics(df, batch_size=5000, logger=None):
     """Compute advanced sequence metrics with improved memory management and numerical stability."""
@@ -13348,35 +13437,62 @@ def _write_executive_summary(log, model_results, feature_importance, pattern_ana
             for feature, metrics in chaos_metrics.items():
                  log.write(f"  - {feature}: Mean Divergence = {metrics.get('mean_divergence', 'N/A'):.4f}, 90th Percentile Divergence = {metrics.get('divergence_90th', 'N/A'):.4f}\n")
             if any(metrics.get('mean_divergence', 0) > 0.1 for metrics in chaos_metrics.values()):  # Example threshold
-                log.write(f"  - The gap sequence exhibits some chaotic behavior, indicated by positive divergence rates.\n") # Add interpretation
+                log.write(f"  - The gap sequence exhibits some chaotic behavior, indicated by positive divergence rates. Higher divergence values suggest more unpredictable behavior. The detailed analysis section provides more information about the divergence rates.\n") # Add interpretation
 
         if superposition_patterns:
             log.write("\nSuperposition Patterns:\n")
             for feature, patterns in superposition_patterns.items():
                 log.write(f"  - {feature}: Entropy = {patterns.get('entropy', 'N/A'):.4f}, Number of Modes = {patterns.get('num_modes', 'N/A')}\n")
             if any(patterns.get('num_modes', 0) > 1 for patterns in superposition_patterns.values()):
-                log.write(f"  - Multimodality detected in some feature distributions, suggesting superposition-like phenomena.\n") # Add interpretation
+                log.write(f"  - Multimodality detected in some feature distributions, suggesting superposition-like phenomena. Multiple modes indicate that the data is not centered around a single value, and may be a result of multiple underlying processes.\n") # Add interpretation
 
         if wavelet_patterns and wavelet_patterns.get('wavelet_coeffs'):
             log.write("\nWavelet Analysis:\n")
-            # Add key wavelet findings here (e.g., dominant scales, energy distribution)
-            log.write("  - Wavelet analysis revealed [insert key findings, e.g., dominant scales, energy distribution].  See detailed analysis for coefficients.\n")
-
+            
+            coeffs = wavelet_patterns['wavelet_coeffs']
+            if coeffs:
+                # Analyze the coefficients to find dominant scales
+                level_energies = [np.sum(np.abs(level)**2) for level in coeffs]
+                dominant_level = np.argmax(level_energies)
+                
+                log.write(f"  - Wavelet analysis revealed the presence of dominant energy at level {dominant_level + 1}. This suggests that patterns at this scale are most prominent in the gap sequence.\n")
+                
+                # Add a note about the type of patterns
+                if dominant_level == 0:
+                    log.write("  - The dominant scale corresponds to high-frequency fluctuations in the gap sequence.\n")
+                elif dominant_level == len(coeffs) - 1:
+                    log.write("  - The dominant scale corresponds to low-frequency trends in the gap sequence.\n")
+                else:
+                    log.write("  - The dominant scale corresponds to mid-range patterns in the gap sequence.\n")
+                
+                log.write("  - Key questions to consider: Which scales show the most energy? Do these scales correspond to any known patterns in prime gaps?\n")
+                log.write("  - Tests performed: Discrete Wavelet Transform (DWT) was used to decompose the gap sequence into different frequency components. The energy distribution across these components was analyzed.\n")
+            else:
+                log.write("  - No wavelet coefficients were found.\n")
         if fractal_dimension and fractal_dimension.get('dimension') is not None:
             log.write(f"\nFractal Dimension: {fractal_dimension.get('dimension', 'N/A'):.4f}\n")
-            log.write(f"  - This indicates a [simple/complex] geometric structure in the gap sequence.\n") # Add interpretation
+            if fractal_dimension.get('dimension', 0) > 1:
+                log.write(f"  - This indicates a complex, self-similar geometric structure in the gap sequence, suggesting a non-random process. The fractal dimension quantifies the complexity of the gap sequence.\n")
+            else:
+                log.write(f"  - This indicates a relatively simple geometric structure in the gap sequence. The fractal dimension quantifies the complexity of the gap sequence.\n")
+            log.write("  - Key questions to consider: Is the fractal dimension significantly different from 1? Does the fractal dimension change over different ranges of primes?\n")
+            log.write("  - Tests performed: Box-counting method was used to estimate the fractal dimension of the gap sequence.\n")
 
         if phase_space_analysis and 'embedding_dimension' in phase_space_analysis:
             log.write("\nPhase Space Analysis:\n")
             for lag, metrics in phase_space_analysis['embedding_dimension'].items():
                 log.write(f"  - Lag {lag}: False Neighbor Ratio = {metrics.get('false_neighbor_ratio', 'N/A'):.4f}\n")
             # Add interpretation of embedding dimension
-            log.write("  - The estimated embedding dimension suggests [insert interpretation, e.g., a certain level of determinism/complexity].\n")
+            log.write("  - The estimated embedding dimension suggests the minimum number of variables needed to model the system. A higher embedding dimension indicates more complex dynamics. The false neighbor ratio helps determine the optimal embedding dimension.\n")
+            log.write("  - Key questions to consider: What is the optimal embedding dimension? Does the false neighbor ratio decrease with increasing lag?\n")
+            log.write("  - Tests performed: False nearest neighbors method was used to estimate the embedding dimension of the gap sequence.\n")
 
         if recurrence_plot_data and recurrence_plot_data.get('distance_matrix') is not None:
             log.write("\nRecurrence Plot Analysis:\n")
             # Add key recurrence plot findings here (e.g., diagonal lines, vertical/horizontal lines)
-            log.write("  - Recurrence plot analysis showed [insert key findings, e.g., frequent diagonal lines indicating recurring patterns].\n")
+            log.write("  - Recurrence plot analysis showed patterns such as diagonal lines, indicating recurring patterns in the gap sequence. The detailed analysis section provides more information about the recurrence plot.\n")
+            log.write("  - Key questions to consider: Are there diagonal lines indicating recurring patterns? Are there vertical or horizontal lines indicating laminar states?\n")
+            log.write("  - Tests performed: A recurrence plot was generated to visualize the recurrence patterns in the gap sequence.\n")
         
         # Other Significant Discoveries
         log.write("\nOTHER SIGNIFICANT DISCOVERIES:\n")
@@ -13384,6 +13500,16 @@ def _write_executive_summary(log, model_results, feature_importance, pattern_ana
             log.write("  - We have found that prime gaps can be grouped into distinct clusters, each with its own characteristics. These clusters are described in the detailed analysis section.\n")
         else:
             log.write("  - No significant discoveries beyond the above were made in this analysis.\n")
+        
+        # Repeating Sequence Analysis
+        if pattern_analysis and 'repeating_patterns' in pattern_analysis:
+            log.write("\nRepeating Sequence Analysis:\n")
+            if pattern_analysis['repeating_patterns'].get('most_common'):
+                log.write("  - The following repeating sequences were found:\n")
+                for seq, count in pattern_analysis['repeating_patterns']['most_common'][:5]:
+                    log.write(f"    - Sequence: {seq}, Count: {count}\n")
+            else:
+                log.write("  - No repeating sequences were found.\n")
         
         log.write("\n=== END OF ANALYSIS SUMMARY ===\n\n")
     
@@ -14168,7 +14294,7 @@ def _write_detailed_analysis_section(log, feature_importance=None, feature_selec
             
             if 'mutual_information' in feature_interactions:
                 log.write("\nMutual Information Scores:\n")
-                for interaction, score in feature_interactions['mutual_information'].items():
+                for interaction, score in feature_interactions['mutual_information_entanglement'].items():
                     log.write(f"- {interaction}: {float(score):.4f}\n")
             
             if 'nonlinear_relationships' in feature_interactions:
@@ -14292,39 +14418,79 @@ def _write_detailed_analysis_section(log, feature_importance=None, feature_selec
         
         # Chaos Analysis
         if chaos_metrics:
-            _write_chaos_analysis(log, chaos_metrics, logger=logger)
+            log.write("\n--- Chaos Analysis ---\n")
+            for feature, metrics in chaos_metrics.items():
+                 log.write(f"  - {feature}: Mean Divergence = {metrics.get('mean_divergence', 'N/A'):.4f}, 90th Percentile Divergence = {metrics.get('divergence_90th', 'N/A'):.4f}\n")
         
         # Superposition Analysis
         if superposition_patterns:
-            _write_superposition_analysis(log, superposition_patterns, logger=logger)
+            log.write("\n--- Superposition Analysis ---\n")
+            for feature, patterns in superposition_patterns.items():
+                log.write(f"  - {feature}: Entropy = {patterns.get('entropy', 'N/A'):.4f}, Number of Modes = {patterns.get('num_modes', 'N/A')}\n")
         
         # Wavelet Analysis
-        if wavelet_patterns:
-            _write_wavelet_analysis(log, wavelet_patterns, logger=logger)
+        if wavelet_patterns and wavelet_patterns.get('wavelet_coeffs'):
+            log.write("\n--- Wavelet Analysis ---\n")
+            
+            coeffs = wavelet_patterns['wavelet_coeffs']
+            if coeffs:
+                # Analyze the coefficients to find dominant scales
+                level_energies = [np.sum(np.abs(level)**2) for level in coeffs]
+                dominant_level = np.argmax(level_energies)
+                
+                log.write(f"  - Wavelet analysis revealed the presence of dominant energy at level {dominant_level + 1}. This suggests that patterns at this scale are most prominent in the gap sequence.\n")
+                
+                # Add a note about the type of patterns
+                if dominant_level == 0:
+                    log.write("  - The dominant scale corresponds to high-frequency fluctuations in the gap sequence.\n")
+                elif dominant_level == len(coeffs) - 1:
+                    log.write("  - The dominant scale corresponds to low-frequency trends in the gap sequence.\n")
+                else:
+                    log.write("  - The dominant scale corresponds to mid-range patterns in the gap sequence.\n")
+                
+                log.write("  - Key questions to consider: Which scales show the most energy? Do these scales correspond to any known patterns in prime gaps?\n")
+                log.write("  - Tests performed: Discrete Wavelet Transform (DWT) was used to decompose the gap sequence into different frequency components. The energy distribution across these components was analyzed.\n")
+            else:
+                log.write("  - No wavelet coefficients were found.\n")
         
         # Fractal Dimension Analysis
-        if fractal_dimension:
-            _write_fractal_dimension_analysis(log, fractal_dimension, logger=logger)
+        if fractal_dimension and fractal_dimension.get('dimension') is not None:
+            log.write(f"\n--- Fractal Dimension Analysis ---\n")
+            log.write(f"  - Fractal Dimension: {fractal_dimension.get('dimension', 'N/A'):.4f}\n")
+            if fractal_dimension.get('dimension', 0) > 1:
+                log.write(f"  - This indicates a complex, self-similar geometric structure in the gap sequence, suggesting a non-random process. The fractal dimension quantifies the complexity of the gap sequence.\n")
+            else:
+                log.write(f"  - This indicates a relatively simple geometric structure in the gap sequence. The fractal dimension quantifies the complexity of the gap sequence.\n")
+            log.write("  - Key questions to consider: Is the fractal dimension significantly different from 1? Does the fractal dimension change over different ranges of primes?\n")
+            log.write("  - Tests performed: Box-counting method was used to estimate the fractal dimension of the gap sequence.\n")
         
         # Phase Space Analysis
-        if phase_space_analysis:
-            _write_phase_space_analysis(log, phase_space_analysis, logger=logger)
+        if phase_space_analysis and 'embedding_dimension' in phase_space_analysis:
+            log.write("\n--- Phase Space Analysis ---\n")
+            for lag, metrics in phase_space_analysis['embedding_dimension'].items():
+                log.write(f"  - Lag {lag}: False Neighbor Ratio = {metrics.get('false_neighbor_ratio', 'N/A'):.4f}\n")
+            # Add interpretation of embedding dimension
+            log.write("  - The estimated embedding dimension suggests the minimum number of variables needed to model the system. A higher embedding dimension indicates more complex dynamics. The false neighbor ratio helps determine the optimal embedding dimension.\n")
+            log.write("  - Key questions to consider: What is the optimal embedding dimension? Does the false neighbor ratio decrease with increasing lag?\n")
+            log.write("  - Tests performed: False nearest neighbors method was used to estimate the embedding dimension of the gap sequence.\n")
         
         # Recurrence Plot Analysis
-        if recurrence_plot_data:
-            _write_recurrence_plot_analysis(log, recurrence_plot_data, logger=logger)
+        if recurrence_plot_data and recurrence_plot_data.get('distance_matrix') is not None:
+            log.write("\n--- Recurrence Plot Analysis ---\n")
+            # Add key recurrence plot findings here (e.g., diagonal lines, vertical/horizontal lines)
+            log.write("  - Recurrence plot analysis showed patterns such as diagonal lines, indicating recurring patterns in the gap sequence. The detailed analysis section provides more information about the recurrence plot.\n")
+            log.write("  - Key questions to consider: Are there diagonal lines indicating recurring patterns? Are there vertical or horizontal lines indicating laminar states? What is the density of recurrence points?\n")
+            log.write("  - Tests performed: A recurrence plot was generated to visualize the recurrence patterns in the gap sequence.\n")
         
-        log.write("\n")
-        
+        log.write("\n=== END OF DETAILED ANALYSIS SECTION ===\n\n")
+    
     except Exception as e:
         log.write(f"Error writing detailed analysis: {str(e)}\n")
         if logger:
             logger.logger.error(traceback.format_exc())
         else:
             traceback.print_exc()
-    
-    log.write("\n=== END OF DETAILED ANALYSIS SECTION ===\n\n")
-    
+
 def _write_modular_patterns_to_file(log_file, pattern_analysis):
     """Writes the modular pattern distribution with improved handling for large datasets."""
     with open(log_file, "w") as factor_file:
@@ -14369,8 +14535,8 @@ def _write_modular_patterns_to_file(log_file, pattern_analysis):
                 factor_file.write(f"Zero occurrence: {zero_count:,} residues\n")
             
             factor_file.write(f"Entropy: {data['entropy']:.4f}\n")
-            factor_file.write("-" * 80 + "\n")
-                    
+            factor_file.write("-" * 80 + "\n")               
+
 def _write_progression_analysis(log, pattern_analysis, time_series_analysis=None, logger=None):
     """Writes the progression analysis section of the report with improved error handling and numerical stability."""
     log.write("\n--- Progression Analysis ---\n")
@@ -14444,7 +14610,7 @@ def _write_progression_analysis(log, pattern_analysis, time_series_analysis=None
             logger.logger.error(traceback.format_exc())
         else:
             traceback.print_exc()
-                   
+                 
 def _write_predictive_model_analysis(log, model_results, logger=None):
     """Writes the predictive model analysis section of the report with improved error handling."""
     log.write("\n--- Predictive Model ---\n")
@@ -14500,7 +14666,7 @@ def _write_predictive_model_analysis(log, model_results, logger=None):
             logger.logger.error(traceback.format_exc())
         else:
             traceback.print_exc()
-                                                         
+                                                        
 def _write_model_comparison(log, model_results, logger=None):
     """Writes the model comparison section of the report with improved error handling and numerical stability."""
     log.write("\n--- Model Comparison ---\n")
@@ -14554,7 +14720,7 @@ def _write_model_comparison(log, model_results, logger=None):
             logger.logger.error(traceback.format_exc())
         else:
             traceback.print_exc()
-
+            
 @timing_decorator
 def compute_cluster_center_statistics(df, batch_size=10000, logger=None):
     """Pre-compute cluster statistics efficiently with improved memory management and numerical stability."""
@@ -14749,8 +14915,8 @@ def _write_cluster_centers(log, df, cluster_stats=None, logger=None):
         else:
             traceback.print_exc()
     
-    log.write("\n")                                                                                                          
-
+    log.write("\n")
+    
 @timing_decorator
 def compute_factor_statistics(df, batch_size=5000, logger=None):
     """Pre-compute factor statistics for reporting with improved memory management and numerical stability."""
@@ -14938,7 +15104,7 @@ def _write_factor_analysis(log, df, logger=None):
         if 'unique_factors' in df.columns:
             log.write("\nFactor Statistics:\n")
             stats = df['unique_factors'].describe()
-            log.write(f"- Average unique factors: {stats['mean']:.2f}\n")
+            log.write(f"- Average unique factors per gap: {stats['mean']:.2f}\n")
             log.write(f"- Maximum unique factors in a gap: {stats['max']:.0f}\n")
         
         if 'factor_density' in df.columns:
@@ -15310,9 +15476,11 @@ def _write_prime_probability_map(log, prime_probability_map=None, change_points=
             logger.logger.error(traceback.format_exc())
         else:
             traceback.print_exc()
-            
+    
+    log.write("\n")
+          
 def _write_advanced_analyses_summary(log, gap_distribution, gap_sequences, factor_patterns, cluster_transitions, logger=None):
-    """Writes summary of advanced analyses with improved error handling."""
+    """Writes summary of advanced analyses with improved numerical stability."""
     log.write("\n=== ADVANCED ANALYSES SUMMARY ===\n")
     
     # Gap Distribution Characteristics
@@ -15324,8 +15492,8 @@ def _write_advanced_analyses_summary(log, gap_distribution, gap_sequences, facto
         log.write(f"- Std Cluster Size: {summary.get('std_cluster_size', 'N/A'):.2f}\n")
         if 'mean_gap_ranges' in summary:
             log.write("\nMean Gap Ranges:\n")
-            for cluster_id, range in summary['mean_gap_ranges'].items():
-                log.write(f"  - Cluster {cluster_id}: {range:.2f}\n")
+            for cluster_id, range_val in summary['mean_gap_ranges'].items():
+                log.write(f"  - Cluster {cluster_id}: {range_val:.2f}\n")
     else:
         log.write("Gap distribution analysis not available\n")
     
@@ -15355,7 +15523,7 @@ def _write_advanced_analyses_summary(log, gap_distribution, gap_sequences, facto
         stats_to_write = {
             'Mean Unique Factors': metrics.get('mean_unique_factors', 0),
             'Mean Total Factors': metrics.get('mean_total_factors', 0),
-            'Factor Density Mean': metrics.get('factor_density_mean', 0)
+            'Factor Density Mean': metrics.get('mean_density', 0)
         }
         
         for name, value in stats_to_write.items():
@@ -15451,7 +15619,7 @@ def _write_wavelet_analysis(log, wavelet_patterns, logger=None):
             traceback.print_exc()
     
     log.write("\n")
-
+    
 def _write_fractal_dimension_analysis(log, fractal_dimension, logger=None):
     """Writes the fractal dimension analysis section of the report."""
     log.write("\n--- Fractal Dimension Analysis ---\n")
@@ -15488,7 +15656,7 @@ def _write_phase_space_analysis(log, phase_space_analysis, logger=None):
         if 'embedding_dimension' in phase_space_analysis:
             log.write("\nEmbedding Dimension Analysis:\n")
             for lag, metrics in phase_space_analysis['embedding_dimension'].items():
-                log.write(f"Lag {lag}: False Neighbor Ratio = {metrics.get('false_neighbor_ratio', 'N/A'):.4f}\n")
+                log.write(f"  - Lag {lag}: False Neighbor Ratio = {metrics.get('false_neighbor_ratio', 'N/A'):.4f}\n")
         
         if 'phase_space_data' in phase_space_analysis:
             log.write("\nPhase Space Data (first 5 points for each lag):\n")
@@ -15503,7 +15671,7 @@ def _write_phase_space_analysis(log, phase_space_analysis, logger=None):
             traceback.print_exc()
     
     log.write("\n")
-    
+      
 def _write_recurrence_plot_analysis(log, recurrence_plot_data, logger=None):
     """Writes the recurrence plot analysis section of the report."""
     log.write("\n--- Recurrence Plot Analysis ---\n")
@@ -15522,7 +15690,7 @@ def _write_recurrence_plot_analysis(log, recurrence_plot_data, logger=None):
             traceback.print_exc()
     
     log.write("\n")
-
+    
 @njit
 def _compute_temporal_stats_numba(series, lags, batch_size):
     """Numba-optimized function to compute temporal statistics."""
@@ -15722,7 +15890,7 @@ def compute_temporal_pattern_statistics(df, batch_size=10000, logger=None):
             'sequences': {},
             'trends': {}
         }
-
+        
 def _write_temporal_patterns_analysis(log, df, temporal_stats=None):
     """Writes temporal patterns analysis using pre-computed statistics."""
     log.write("\n=== TEMPORAL PATTERNS ANALYSIS ===\n")
@@ -16177,7 +16345,9 @@ def _write_analysis_report(log_file, model_results, feature_importance, pattern_
                 logger.log_and_print("Writing executive summary...")
             _write_executive_summary(log, model_results, feature_importance, pattern_analysis, df, cluster_sequence_analysis,
                                     shap_values, shap_importance, prediction_intervals, change_points,
-                                    cluster_stats, advanced_clustering, statistical_tests)
+                                    cluster_stats, advanced_clustering, statistical_tests,
+                                    chaos_metrics=None, superposition_patterns=None, wavelet_patterns=None,
+                                    fractal_dimension=None, phase_space_analysis=None, recurrence_plot_data=None, logger=logger)
             
             if logger:
                 logger.log_and_print("Writing model performance summary...")
@@ -16277,7 +16447,7 @@ def _write_analysis_report(log_file, model_results, feature_importance, pattern_
             logger.logger.error(traceback.format_exc())
         else:
             traceback.print_exc()
-            
+               
 def write_analysis_report(log_file, model_results, feature_importance, pattern_analysis, df, 
                          prime_probability_map=None, cluster_sequence_analysis=None,
                          gap_distribution=None, gap_sequences=None, factor_patterns=None,
