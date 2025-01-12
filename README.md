@@ -4,9 +4,11 @@ This code conducts a comprehensive investigation into the properties and pattern
 
 NOTE: This code was implemented using Multiprocessing on MacOS. 
 
-The initial phase involves generating a dataset of the first N primes and their corresponding gaps. Beyond simply computing the gaps, the code performs extensive feature engineering, deriving a rich set of attributes for each gap.
+The initial phase involves generating a dataset of the first N primes and their corresponding gaps. 
 
-These features encompass:
+Beyond simply computing the gaps, the code performs extensive feature engineering, deriving a rich set of attributes for each gap.
+
+Feature Engineering includes construction of features using a variety of techniques, including:
 
 Factor Analysis: For the composite numbers residing within each gap, the code analyzes their prime factorization. 
 
@@ -17,7 +19,10 @@ Additionally, the square root of each factor is used to derive further features,
 Prime Type Identification: The code classifies the primes flanking each gap according to their type (e.g., twin, Sophie Germain, safe, Mersenne). This classification is implemented using optimized algorithms and caching for efficiency.
 
 Gap Properties: The gap size itself is included as a feature, along with its residues modulo 6 and 30. These modulo residues are chosen due to their relevance in prime gap patterns.
-Advanced Features: The code constructs additional features based on combinations and transformations of the initial features. This includes rolling statistics (mean, standard deviation, skewness, kurtosis) of the gap size, power and logarithmic transformations of factor-related features, interaction terms (products, ratios, sums) between key features, lag features of gap size and factor density, difference features of gap size, and frequency domain features derived from the Fast Fourier Transform (FFT) of the gap sequence. Furthermore, pattern-based features like distance to the nearest peak in the gap sequence and indicators for local maxima and minima are included. Composite features, combining multiple aspects of factor analysis, gap dynamics, and frequency characteristics, are also engineered to capture more complex relationships.
+
+Advanced Features: The code constructs additional features based on combinations and transformations of the initial features. This includes rolling statistics (mean, standard deviation, skewness, kurtosis) of the gap size, power and logarithmic transformations of factor-related features, interaction terms (products, ratios, sums) between key features, lag features of gap size and factor density, difference features of gap size, and frequency domain features derived from the Fast Fourier Transform (FFT) of the gap sequence. Furthermore, pattern-based features like distance to the nearest peak in the gap sequence and indicators for local maxima and minima are included. 
+
+Composite features: Composites of features are constructed combining multiple aspects of factor analysis, gap dynamics, and frequency characteristics, are also engineered to capture more complex relationships.
 
 Following feature engineering, the code performs initial clustering using K-Means with an optimized number of clusters determined by the silhouette score. This initial clustering serves as a foundation for subsequent analyses.
 
