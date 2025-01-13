@@ -85,7 +85,7 @@ N_TEST_RANGES = 5 # Number of ranges to test the model on
 TEST_RANGE_SIZE = None # Size of each test range. If None it will be calculated automatically
 TRANSFER_LEARNING_ENABLED = True # Enable or disable transfer learning
 
-N = 10000 # Number of primes to analyze
+N = 20000 # Number of primes to analyze
 COMPOSITE_SAMPLE_RATE = .1  # Default 1.0 for 100% for full analysis
 SEQUENCE_LENGTH_RANGE = (2, 20) # Range of sequence lengths to test; computation time increases with length
 
@@ -1870,6 +1870,9 @@ def analyze_primes_and_gaps(n, output_log_file, plot_dir):
         
         logger.log_and_print(f"\nStarting advanced prime number analysis for n={n}")
         overall_start = time.time()
+        
+        # Initialize analysis_stats
+        analysis_stats = {}
     
         try:
             if n >= BATCH_THRESHOLD:
@@ -1887,13 +1890,12 @@ def analyze_primes_and_gaps(n, output_log_file, plot_dir):
                 logger.log_and_print(f"Using batch size of {batch_size} (Available memory: {available_memory:.2f} MB)")
                 
                 # Call the large-scale analysis function
-                complete_results = analyze_primes_and_gaps_large_scale(n, output_log_file, plot_dir, batch_size=batch_size)
+                complete_results = analyze_primes_and_gaps_large_scale(n, output_log_file, plot_dir, batch_size=batch_size, analysis_stats=analysis_stats)
                 
                 if complete_results is None:
                     logger.log_and_print("Error: Large-scale analysis failed, cannot proceed.", level=logging.ERROR)
                     return None
                 
-                return complete_results
             else:
                 logger.log_and_print(f"\nStandard dataset size (N={n}). Using regular processing...")
                 # Generate primes and compute gaps
@@ -2117,8 +2119,7 @@ def analyze_primes_and_gaps(n, output_log_file, plot_dir):
                 logger.log_and_print("\nAnalyzing prime factor patterns...")
                 factor_patterns = analyze_prime_factor_patterns(df, logger=logger)
                 
-                # Create visualizations with protection
-                logger.log_and_print("\nCreating visualizations...")
+                # Store results for later visualization
                 analyses = {
                     'pattern_analysis': pattern_analysis,
                     'cluster_stats': cluster_stats,
@@ -2136,9 +2137,6 @@ def analyze_primes_and_gaps(n, output_log_file, plot_dir):
                     'advanced_clustering': advanced_clustering_results,
                     'statistical_tests': statistical_test_results
                 }
-                create_visualizations_large_scale(df, feature_importance, pattern_analysis, 
-                                               plot_dir, model_results, analysis_stats=analyses)
-                create_cluster_visualization(df, plot_dir, logger=logger)
                 
                 # Store complete results
                 complete_results = {
@@ -2164,7 +2162,7 @@ def analyze_primes_and_gaps(n, output_log_file, plot_dir):
                     gap_sequences=analyses['gap_sequences'],
                     factor_patterns=analyses['factor_patterns'],
                     cluster_transitions=analyses['cluster_transitions'],
-                    temporal_patterns=analyses['temporal_patterns'],
+                    temporal_patterns=analyses['temporal_stats'],
                     separation_metrics=analyses['separation_metrics'],
                     shap_values=shap_values,
                     shap_importance=shap_importance,
@@ -2176,14 +2174,20 @@ def analyze_primes_and_gaps(n, output_log_file, plot_dir):
                     logger=logger
                 )
                 
+                # Create visualizations
+                logger.log_and_print("\nCreating visualizations...")
+                create_visualizations_large_scale(df, feature_importance, pattern_analysis, 
+                                               plot_dir, model_results, analysis_stats=analyses)
+                create_cluster_visualization(df, plot_dir, logger=logger)
+                
                 return complete_results
         
         except Exception as e:
             logger.log_and_print(f"Critical error in analysis pipeline: {str(e)}", level=logging.ERROR)
             return None
-        
+              
 @timing_decorator
-def analyze_primes_and_gaps_large_scale(n, output_log_file, plot_dir, batch_size=100000):
+def analyze_primes_and_gaps_large_scale(n, output_log_file, plot_dir, batch_size=100000, analysis_stats=None):
     """Enhanced analysis pipeline for large datasets with error handling."""
     with suppress_numeric_warnings():
         try:
@@ -2420,7 +2424,7 @@ def analyze_primes_and_gaps_large_scale(n, output_log_file, plot_dir, batch_size
                 print(f"Critical error in analysis: {str(e)}")
                 traceback.print_exc()
             return None
-                                               
+                                 
 @timing_decorator
 def analyze_gap_distribution_characteristics(df, logger=None):
     """Analyze gap distribution characteristics with improved numerical stability and error handling."""
@@ -4165,8 +4169,8 @@ def create_advanced_features(df, logger=None, feature_importance=None, chaos_met
         else:
             print(f"Error creating advanced features: {str(e)}")
             traceback.print_exc()
-        return df           
-
+        return df
+    
 @timing_decorator
 def perform_clustering(df):
     """Perform clustering on smaller datasets with numerical protection."""
@@ -5949,7 +5953,7 @@ def perform_advanced_statistical_tests(df, advanced_clustering_results, batch_si
     try:
         # Convert to float64 and clip values
         numeric_cols = df.select_dtypes(include=[np.number]).columns
-        feature_cols = [col for col in numeric_cols if col != 'cluster']
+        feature_cols = [col for col in numeric_cols if col not in ['cluster']]
         
         for col in feature_cols:
             data = df[col].values.astype(np.float64)
@@ -6003,7 +6007,7 @@ def perform_advanced_statistical_tests(df, advanced_clustering_results, batch_si
             'feature_correlations': {},
             'time_series_tests': {}
         }
-
+        
 @njit
 def _compute_sample_importance_numba(X, y, feature_cols_count):
     """Numba-optimized function to compute feature importance for a single sample."""
@@ -6490,8 +6494,8 @@ def select_optimal_features(df, importance_analysis, target_col='gap_size', batc
             traceback.print_exc()
         
         # Return safe default values
-        raise ValueError("Feature selection failed, no valid features selected.")
-    
+        raise ValueError("Feature selection failed, no valid features selected.")   
+
 @timing_decorator
 def analyze_feature_stability(df, selected_features, n_bootstrap=50, batch_size=5000, logger=None):
     """Analyze stability of feature importance across different subsets with batching."""
@@ -6607,14 +6611,8 @@ def analyze_feature_stability(df, selected_features, n_bootstrap=50, batch_size=
         else:
             print(error_msg)
             traceback.print_exc()
-        
-        # Return safe default values
-        return {
-            'bootstrap_scores': {},
-            'temporal_stability': {},
-            'value_range_stability': {}
-        }
-        
+        return stability_analysis      
+
 @timing_decorator
 def analyze_phase_space(df, feature_col='gap_size', max_lag=5, batch_size=5000, logger=None):
     """Analyze the phase space of a feature with improved numerical stability and memory management."""
@@ -13444,7 +13442,7 @@ def _write_executive_summary(log, model_results, feature_importance, pattern_ana
             for feature, patterns in superposition_patterns.items():
                 log.write(f"  - {feature}: Entropy = {patterns.get('entropy', 'N/A'):.4f}, Number of Modes = {patterns.get('num_modes', 'N/A')}\n")
             if any(patterns.get('num_modes', 0) > 1 for patterns in superposition_patterns.values()):
-                log.write(f"  - Multimodality detected in some feature distributions, suggesting superposition-like phenomena. Multiple modes indicate that the data is not centered around a single value, and may be a result of multiple underlying processes.\n") # Add interpretation
+                log.write(f"  - Multimodality detected in some feature distributions, suggesting superposition-like phenomena. Multiple modes indicate that the data is not centered around a single value, and may be a result of multiple underlying processes. The detailed analysis section provides more information about the distribution shapes.\n") # Add interpretation
 
         if wavelet_patterns and wavelet_patterns.get('wavelet_coeffs'):
             log.write("\nWavelet Analysis:\n")
@@ -13465,17 +13463,18 @@ def _write_executive_summary(log, model_results, feature_importance, pattern_ana
                 else:
                     log.write("  - The dominant scale corresponds to mid-range patterns in the gap sequence.\n")
                 
-                log.write("  - Key questions to consider: Which scales show the most energy? Do these scales correspond to any known patterns in prime gaps?\n")
+                log.write("  - Key questions to consider: Which scales show the most energy? Do these scales correspond to any known patterns in prime gaps? How does the energy distribution change over different ranges of primes?\n")
                 log.write("  - Tests performed: Discrete Wavelet Transform (DWT) was used to decompose the gap sequence into different frequency components. The energy distribution across these components was analyzed.\n")
             else:
                 log.write("  - No wavelet coefficients were found.\n")
+
         if fractal_dimension and fractal_dimension.get('dimension') is not None:
             log.write(f"\nFractal Dimension: {fractal_dimension.get('dimension', 'N/A'):.4f}\n")
             if fractal_dimension.get('dimension', 0) > 1:
-                log.write(f"  - This indicates a complex, self-similar geometric structure in the gap sequence, suggesting a non-random process. The fractal dimension quantifies the complexity of the gap sequence.\n")
+                log.write(f"  - This indicates a complex, self-similar geometric structure in the gap sequence, suggesting a non-random process. The fractal dimension quantifies the complexity of the gap sequence. A value closer to 2 indicates a more complex, space-filling pattern.\n")
             else:
-                log.write(f"  - This indicates a relatively simple geometric structure in the gap sequence. The fractal dimension quantifies the complexity of the gap sequence.\n")
-            log.write("  - Key questions to consider: Is the fractal dimension significantly different from 1? Does the fractal dimension change over different ranges of primes?\n")
+                log.write(f"  - This indicates a relatively simple geometric structure in the gap sequence. The fractal dimension quantifies the complexity of the gap sequence. A value closer to 1 indicates a more linear or less complex pattern.\n")
+            log.write("  - Key questions to consider: Is the fractal dimension significantly different from 1? Does the fractal dimension change over different ranges of primes? What does the fractal dimension tell us about the underlying process generating the gaps?\n")
             log.write("  - Tests performed: Box-counting method was used to estimate the fractal dimension of the gap sequence.\n")
 
         if phase_space_analysis and 'embedding_dimension' in phase_space_analysis:
@@ -13483,15 +13482,15 @@ def _write_executive_summary(log, model_results, feature_importance, pattern_ana
             for lag, metrics in phase_space_analysis['embedding_dimension'].items():
                 log.write(f"  - Lag {lag}: False Neighbor Ratio = {metrics.get('false_neighbor_ratio', 'N/A'):.4f}\n")
             # Add interpretation of embedding dimension
-            log.write("  - The estimated embedding dimension suggests the minimum number of variables needed to model the system. A higher embedding dimension indicates more complex dynamics. The false neighbor ratio helps determine the optimal embedding dimension.\n")
-            log.write("  - Key questions to consider: What is the optimal embedding dimension? Does the false neighbor ratio decrease with increasing lag?\n")
+            log.write("  - The estimated embedding dimension suggests the minimum number of variables needed to model the system. A higher embedding dimension indicates more complex dynamics. The false neighbor ratio helps determine the optimal embedding dimension. A low false neighbor ratio suggests a more deterministic system.\n")
+            log.write("  - Key questions to consider: What is the optimal embedding dimension? Does the false neighbor ratio decrease with increasing lag? What does the embedding dimension tell us about the underlying dynamics of the gap sequence?\n")
             log.write("  - Tests performed: False nearest neighbors method was used to estimate the embedding dimension of the gap sequence.\n")
 
         if recurrence_plot_data and recurrence_plot_data.get('distance_matrix') is not None:
             log.write("\nRecurrence Plot Analysis:\n")
             # Add key recurrence plot findings here (e.g., diagonal lines, vertical/horizontal lines)
             log.write("  - Recurrence plot analysis showed patterns such as diagonal lines, indicating recurring patterns in the gap sequence. The detailed analysis section provides more information about the recurrence plot.\n")
-            log.write("  - Key questions to consider: Are there diagonal lines indicating recurring patterns? Are there vertical or horizontal lines indicating laminar states?\n")
+            log.write("  - Key questions to consider: Are there diagonal lines indicating recurring patterns? Are there vertical or horizontal lines indicating laminar states? What is the density of recurrence points? Do the patterns change over different ranges of primes?\n")
             log.write("  - Tests performed: A recurrence plot was generated to visualize the recurrence patterns in the gap sequence.\n")
         
         # Other Significant Discoveries
@@ -13519,7 +13518,7 @@ def _write_executive_summary(log, model_results, feature_importance, pattern_ana
             logger.logger.error(traceback.format_exc())
         else:
             traceback.print_exc()
-            
+                      
                    
 def _write_hypothesis_analysis(log, model_results, feature_importance, pattern_analysis, df, cluster_sequence_analysis):
     """Writes the hypothesis analysis section of the report."""
@@ -14448,7 +14447,7 @@ def _write_detailed_analysis_section(log, feature_importance=None, feature_selec
                 else:
                     log.write("  - The dominant scale corresponds to mid-range patterns in the gap sequence.\n")
                 
-                log.write("  - Key questions to consider: Which scales show the most energy? Do these scales correspond to any known patterns in prime gaps?\n")
+                log.write("  - Key questions to consider: Which scales show the most energy? Do these scales correspond to any known patterns in prime gaps? How does the energy distribution change over different ranges of primes?\n")
                 log.write("  - Tests performed: Discrete Wavelet Transform (DWT) was used to decompose the gap sequence into different frequency components. The energy distribution across these components was analyzed.\n")
             else:
                 log.write("  - No wavelet coefficients were found.\n")
@@ -14458,10 +14457,10 @@ def _write_detailed_analysis_section(log, feature_importance=None, feature_selec
             log.write(f"\n--- Fractal Dimension Analysis ---\n")
             log.write(f"  - Fractal Dimension: {fractal_dimension.get('dimension', 'N/A'):.4f}\n")
             if fractal_dimension.get('dimension', 0) > 1:
-                log.write(f"  - This indicates a complex, self-similar geometric structure in the gap sequence, suggesting a non-random process. The fractal dimension quantifies the complexity of the gap sequence.\n")
+                log.write(f"  - This indicates a complex, self-similar geometric structure in the gap sequence, suggesting a non-random process. The fractal dimension quantifies the complexity of the gap sequence. A value closer to 2 indicates a more complex, space-filling pattern.\n")
             else:
-                log.write(f"  - This indicates a relatively simple geometric structure in the gap sequence. The fractal dimension quantifies the complexity of the gap sequence.\n")
-            log.write("  - Key questions to consider: Is the fractal dimension significantly different from 1? Does the fractal dimension change over different ranges of primes?\n")
+                log.write(f"  - This indicates a relatively simple geometric structure in the gap sequence. The fractal dimension quantifies the complexity of the gap sequence. A value closer to 1 indicates a more linear or less complex pattern.\n")
+            log.write("  - Key questions to consider: Is the fractal dimension significantly different from 1? Does the fractal dimension change over different ranges of primes? What does the fractal dimension tell us about the underlying process generating the gaps?\n")
             log.write("  - Tests performed: Box-counting method was used to estimate the fractal dimension of the gap sequence.\n")
         
         # Phase Space Analysis
@@ -14470,8 +14469,8 @@ def _write_detailed_analysis_section(log, feature_importance=None, feature_selec
             for lag, metrics in phase_space_analysis['embedding_dimension'].items():
                 log.write(f"  - Lag {lag}: False Neighbor Ratio = {metrics.get('false_neighbor_ratio', 'N/A'):.4f}\n")
             # Add interpretation of embedding dimension
-            log.write("  - The estimated embedding dimension suggests the minimum number of variables needed to model the system. A higher embedding dimension indicates more complex dynamics. The false neighbor ratio helps determine the optimal embedding dimension.\n")
-            log.write("  - Key questions to consider: What is the optimal embedding dimension? Does the false neighbor ratio decrease with increasing lag?\n")
+            log.write("  - The estimated embedding dimension suggests the minimum number of variables needed to model the system. A higher embedding dimension indicates more complex dynamics. The false neighbor ratio helps determine the optimal embedding dimension. A low false neighbor ratio suggests a more deterministic system.\n")
+            log.write("  - Key questions to consider: What is the optimal embedding dimension? Does the false neighbor ratio decrease with increasing lag? What does the embedding dimension tell us about the underlying dynamics of the gap sequence?\n")
             log.write("  - Tests performed: False nearest neighbors method was used to estimate the embedding dimension of the gap sequence.\n")
         
         # Recurrence Plot Analysis
@@ -14479,18 +14478,20 @@ def _write_detailed_analysis_section(log, feature_importance=None, feature_selec
             log.write("\n--- Recurrence Plot Analysis ---\n")
             # Add key recurrence plot findings here (e.g., diagonal lines, vertical/horizontal lines)
             log.write("  - Recurrence plot analysis showed patterns such as diagonal lines, indicating recurring patterns in the gap sequence. The detailed analysis section provides more information about the recurrence plot.\n")
-            log.write("  - Key questions to consider: Are there diagonal lines indicating recurring patterns? Are there vertical or horizontal lines indicating laminar states? What is the density of recurrence points?\n")
+            log.write("  - Key questions to consider: Are there diagonal lines indicating recurring patterns? Are there vertical or horizontal lines indicating laminar states? What is the density of recurrence points? Do the patterns change over different ranges of primes?\n")
             log.write("  - Tests performed: A recurrence plot was generated to visualize the recurrence patterns in the gap sequence.\n")
         
-        log.write("\n=== END OF DETAILED ANALYSIS SECTION ===\n\n")
-    
+        log.write("\n")
+        
     except Exception as e:
         log.write(f"Error writing detailed analysis: {str(e)}\n")
         if logger:
             logger.logger.error(traceback.format_exc())
         else:
             traceback.print_exc()
-
+    
+    log.write("\n=== END OF DETAILED ANALYSIS SECTION ===\n\n")
+    
 def _write_modular_patterns_to_file(log_file, pattern_analysis):
     """Writes the modular pattern distribution with improved handling for large datasets."""
     with open(log_file, "w") as factor_file:
@@ -16148,7 +16149,9 @@ def _assemble_report(log_file, model_results, feature_importance, pattern_analys
                 logger.log_and_print("Writing executive summary...")
             _write_executive_summary(log, model_results, feature_importance, pattern_analysis, df, cluster_sequence_analysis,
                                     shap_values, shap_importance, prediction_intervals, change_points,
-                                    cluster_stats, advanced_clustering, statistical_tests)
+                                    cluster_stats, advanced_clustering, statistical_tests,
+                                    chaos_metrics=None, superposition_patterns=None, wavelet_patterns=None,
+                                    fractal_dimension=None, phase_space_analysis=None, recurrence_plot_data=None, logger=logger)
             
             if logger:
                 logger.log_and_print("Writing model performance summary...")
@@ -16248,7 +16251,7 @@ def _assemble_report(log_file, model_results, feature_importance, pattern_analys
             logger.logger.error(traceback.format_exc())
         else:
             traceback.print_exc()
-
+            
 def _write_advanced_analysis_report(log_file, df, cluster_features, temporal_patterns, separation_metrics, logger=None):
     """Write advanced analysis report with improved numerical handling and error handling."""
     if logger:
