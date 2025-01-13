@@ -70,8 +70,11 @@ from logging.handlers import RotatingFileHandler
 
 # PrimeAnalysis by Nova Spivack
 # https://www.novaspivack.com
-# https://github.com/novaspivack?tab=repositories
+# https://github.com/novaspivack
 # SEE THE README ON GITHUB FOR MORE INFORMATION
+
+# This implementation uses multiprocessing, optimized with Numba, and using batching and checkpoints for large datasets to avoid memory issues
+# Still a work in progress, but it runs (needs improvements and further optimizations for larger datasets)
 
 ################################################################################
 # SETTINGS
@@ -79,20 +82,25 @@ from logging.handlers import RotatingFileHandler
 
 # **** NOTE!!!!: REMEMBER TO SET YOUR PYTHON INTERPRETER TO THE SAME INTERPRETER AS TENSORFLOW PATH ****
 
+N = 20000 # Number of primes to analyze
+BATCH_THRESHOLD = 50000  # Threshold for value of N that will trigger batch processing. 
+BATCH_SIZE = 1000  # Default batch size for large datasets
+
+
+SEQUENCE_LENGTH_RANGE = (10, 20) # Range of sequence lengths to test for repeating patterns; setting a low start value will result in a lot of detections, and computation time increases with magnitude of end value
+
+COMPOSITE_SAMPLE_RATE = .1  # Default 1.0 for 100% for full analysis of composites in the range.
+
 DEBUG_MODE = True # Set to True to enable debug mode with verbose logging and profiling
-PRIME_MAP_SAMPLE_RATE = 0.1 # Set to 10% for testing
-N_TEST_RANGES = 5 # Number of ranges to test the model on
+
+PRIME_MAP_SAMPLE_RATE = 0.1 # Set to 10% for testing - this governs the number of prime location predictions to map
+
+N_TEST_RANGES = 5 # Number of ranges outside the training set to test the model on (ranges are randomly selected above the size of the testing data range)
 TEST_RANGE_SIZE = None # Size of each test range. If None it will be calculated automatically
+
 TRANSFER_LEARNING_ENABLED = True # Enable or disable transfer learning
 
-N = 20000 # Number of primes to analyze
-COMPOSITE_SAMPLE_RATE = .1  # Default 1.0 for 100% for full analysis
-SEQUENCE_LENGTH_RANGE = (2, 20) # Range of sequence lengths to test; computation time increases with length
 
-# add other settings here if needed; e.g. which ML models to run, or settings related to the analysis and amount of computation to do etc. Making the system more configurable will be beneficial especially if we start doing analysis that could be computationally intensive so that we can test with lower computation and then when the system is working we can increase to full computation which might take longer to run. These could represented as configuration settings here.
-
-BATCH_THRESHOLD = 100000  # Threshold for batch processing; normally ste to 50000
-BATCH_SIZE = 1000  # Default batch size for large datasets; normally set to 10000
 
 
 
@@ -1316,11 +1324,11 @@ def _compute_cluster_level_features_numba(cluster_gaps, sub_clusters, unique_fac
     
     num_gaps = len(cluster_gaps)
     
-    cluster_gap_mean = np.mean(cluster_gaps)
-    cluster_gap_std = np.std(cluster_gaps)
-    cluster_gap_median = np.median(cluster_gaps)
-    cluster_gap_skew = skew(cluster_gaps)
-    cluster_gap_kurtosis = kurtosis(cluster_gaps)
+    cluster_gap_mean = np.mean(cluster_gaps) if num_gaps > 0 else 0.0
+    cluster_gap_std = np.std(cluster_gaps) if num_gaps > 1 else 0.0
+    cluster_gap_median = np.median(cluster_gaps) if num_gaps > 0 else 0.0
+    cluster_gap_skew = skew(cluster_gaps) if num_gaps > 2 else 0.0
+    cluster_gap_kurtosis = kurtosis(cluster_gaps) if num_gaps > 3 else 0.0
     
     sub_cluster_freqs = {}
     if len(sub_clusters) > 0:
@@ -1349,17 +1357,17 @@ def _compute_cluster_level_features_numba(cluster_gaps, sub_clusters, unique_fac
             sub_factor_density = factor_density[sub_mask]
             sub_mod6 = gap_mod6[sub_mask]
             
-            sub_cluster_gap_means[sub_id] = np.mean(sub_gaps)
-            sub_cluster_gap_stds[sub_id] = np.std(sub_gaps)
-            sub_cluster_gap_medians[sub_id] = np.median(sub_gaps)
-            sub_cluster_gap_skews[sub_id] = skew(sub_gaps)
-            sub_cluster_gap_kurtosises[sub_id] = kurtosis(sub_gaps)
+            sub_cluster_gap_means[sub_id] = np.mean(sub_gaps) if len(sub_gaps) > 0 else 0.0
+            sub_cluster_gap_stds[sub_id] = np.std(sub_gaps) if len(sub_gaps) > 1 else 0.0
+            sub_cluster_gap_medians[sub_id] = np.median(sub_gaps) if len(sub_gaps) > 0 else 0.0
+            sub_cluster_gap_skews[sub_id] = skew(sub_gaps) if len(sub_gaps) > 2 else 0.0
+            sub_cluster_gap_kurtosises[sub_id] = kurtosis(sub_gaps) if len(sub_gaps) > 3 else 0.0
             
             if len(sub_unique_factors) > 0:
                 sub_cluster_unique_factors_means[sub_id] = np.mean(sub_unique_factors)
-                sub_cluster_unique_factors_stds[sub_id] = np.std(sub_unique_factors)
+                sub_cluster_unique_factors_stds[sub_id] = np.std(sub_unique_factors) if len(sub_unique_factors) > 1 else 0.0
                 sub_cluster_total_factors_means[sub_id] = np.mean(sub_total_factors)
-                sub_cluster_total_factors_stds[sub_id] = np.std(sub_total_factors)
+                sub_cluster_total_factors_stds[sub_id] = np.std(sub_total_factors) if len(sub_total_factors) > 1 else 0.0
             
             if len(sub_mod6) > 0:
                 for i in range(6):
@@ -1367,7 +1375,7 @@ def _compute_cluster_level_features_numba(cluster_gaps, sub_clusters, unique_fac
             
             if len(sub_factor_density) > 0:
                 sub_cluster_factor_density_means[sub_id] = np.mean(sub_factor_density)
-                sub_cluster_factor_density_stds[sub_id] = np.std(sub_factor_density)
+                sub_cluster_factor_density_stds[sub_id] = np.std(sub_factor_density) if len(sub_factor_density) > 1 else 0.0
     
     cluster_mean_unique_factors = np.mean(unique_factors) if len(unique_factors) > 0 else 0.0
     cluster_std_unique_factors = np.std(unique_factors) if len(unique_factors) > 1 else 0.0
@@ -1415,7 +1423,96 @@ def _compute_cluster_level_features_numba(cluster_gaps, sub_clusters, unique_fac
         'cluster_mod6_freqs': cluster_mod6_freqs,
         'cluster_mod30_freqs': cluster_mod30_freqs
     }
-
+    
+@njit
+def _compute_sequence_features_numba(gaps, clusters, sub_clusters, unique_factors, factor_density, sum_of_prime_factors, sequence_length):
+    """Numba-optimized version of compute_sequence_features."""
+    
+    num_gaps = len(gaps)
+    
+    seq_mean_gap = np.mean(gaps)
+    seq_std_gap = np.std(gaps)
+    seq_trend = np.polyfit(np.arange(sequence_length), gaps, 1)[0]
+    seq_last_gap = gaps[-1]
+    
+    seq_cluster_freqs = {}
+    if len(clusters) > 0:
+        for cluster_id in set(clusters):
+            seq_cluster_freqs[cluster_id] = np.sum(clusters == cluster_id) / num_gaps
+    
+    seq_last_clusters = {}
+    if len(clusters) > 0:
+        for j in range(1, min(11, sequence_length + 1)):
+            seq_last_clusters[j] = clusters[-j]
+    
+    seq_sub_cluster_freqs = {}
+    seq_last_sub_clusters = {}
+    seq_sub_transition_counts = {}
+    seq_max_sub_cluster_run = 1
+    
+    if len(sub_clusters) > 0:
+        for sub_id in set(sub_clusters):
+            seq_sub_cluster_freqs[sub_id] = np.sum(sub_clusters == sub_id) / num_gaps
+        
+        for j in range(1, min(11, sequence_length + 1)):
+            seq_last_sub_clusters[j] = sub_clusters[-j]
+        
+        for i in range(len(sub_clusters) - 1):
+            from_cluster = sub_clusters[i]
+            to_cluster = sub_clusters[i+1]
+            key = (from_cluster, to_cluster)
+            seq_sub_transition_counts[key] = seq_sub_transition_counts.get(key, 0) + 1
+        
+        current_run = 1
+        max_run = 1
+        for j in range(1, len(sub_clusters)):
+            if sub_clusters[j] == sub_clusters[j-1]:
+                current_run += 1
+                max_run = max(max_run, current_run)
+            else:
+                current_run = 1
+        seq_max_sub_cluster_run = max_run
+    
+    seq_mean_unique_factors = np.mean(unique_factors) if len(unique_factors) > 0 else 0.0
+    seq_std_unique_factors = np.std(unique_factors) if len(unique_factors) > 1 else 0.0
+    seq_trend_unique_factors = np.polyfit(np.arange(sequence_length), unique_factors, 1)[0] if len(unique_factors) > 1 else 0.0
+    
+    seq_mod6_freqs = {}
+    if len(gaps) > 0:
+        for i in range(6):
+            seq_mod6_freqs[i] = np.sum((gaps % 6) == i) / len(gaps)
+    
+    seq_mean_factor_density = np.mean(factor_density) if len(factor_density) > 0 else 0.0
+    seq_std_factor_density = np.std(factor_density) if len(factor_density) > 1 else 0.0
+    seq_trend_factor_density = np.polyfit(np.arange(sequence_length), factor_density, 1)[0] if len(factor_density) > 1 else 0.0
+    
+    seq_mean_prime_factor_sum = np.mean(sum_of_prime_factors) if len(sum_of_prime_factors) > 0 else 0.0
+    seq_std_prime_factor_sum = np.std(sum_of_prime_factors) if len(sum_of_prime_factors) > 1 else 0.0
+    seq_trend_prime_factor_sum = np.polyfit(np.arange(sequence_length), sum_of_prime_factors, 1)[0] if len(sum_of_prime_factors) > 1 else 0.0
+    
+    return {
+        'seq_mean_gap': float(seq_mean_gap),
+        'seq_std_gap': float(seq_std_gap),
+        'seq_trend': float(seq_trend),
+        'seq_last_gap': float(seq_last_gap),
+        'seq_cluster_freqs': seq_cluster_freqs,
+        'seq_last_clusters': seq_last_clusters,
+        'seq_sub_cluster_freqs': seq_sub_cluster_freqs,
+        'seq_last_sub_clusters': seq_last_sub_clusters,
+        'seq_sub_transition_counts': seq_sub_transition_counts,
+        'seq_max_sub_cluster_run': int(seq_max_sub_cluster_run),
+        'seq_mean_unique_factors': float(seq_mean_unique_factors),
+        'seq_std_unique_factors': float(seq_std_unique_factors),
+        'seq_trend_unique_factors': float(seq_trend_unique_factors),
+        'seq_mod6_freqs': seq_mod6_freqs,
+        'seq_mean_factor_density': float(seq_mean_factor_density),
+        'seq_std_factor_density': float(seq_std_factor_density),
+        'seq_trend_factor_density': float(seq_trend_factor_density),
+        'seq_mean_prime_factor_sum': float(seq_mean_prime_factor_sum),
+        'seq_std_prime_factor_sum': float(seq_std_prime_factor_sum),
+        'seq_trend_prime_factor_sum': float(seq_trend_prime_factor_sum)
+    }
+    
 @timing_decorator
 def compute_cluster_level_features(df, cluster_id):
     """Compute aggregate features for a cluster including sub-cluster patterns."""
@@ -1525,96 +1622,6 @@ def compute_cluster_level_features(df, cluster_id):
     })
     
     return features
-
-@njit
-def _compute_sequence_features_numba(gaps, clusters, sub_clusters, unique_factors, factor_density, sum_of_prime_factors, sequence_length):
-    """Numba-optimized version of compute_sequence_features."""
-    
-    num_gaps = len(gaps)
-    
-    seq_mean_gap = np.mean(gaps)
-    seq_std_gap = np.std(gaps)
-    seq_trend = np.polyfit(np.arange(sequence_length), gaps, 1)[0]
-    seq_last_gap = gaps[-1]
-    
-    seq_cluster_freqs = {}
-    if len(clusters) > 0:
-        for cluster_id in set(clusters):
-            seq_cluster_freqs[cluster_id] = np.sum(clusters == cluster_id) / num_gaps
-    
-    seq_last_clusters = {}
-    if len(clusters) > 0:
-        for j in range(1, min(11, sequence_length + 1)):
-            seq_last_clusters[j] = clusters[-j]
-    
-    seq_sub_cluster_freqs = {}
-    seq_last_sub_clusters = {}
-    seq_sub_transition_counts = {}
-    seq_max_sub_cluster_run = 1
-    
-    if len(sub_clusters) > 0:
-        for sub_id in set(sub_clusters):
-            seq_sub_cluster_freqs[sub_id] = np.sum(sub_clusters == sub_id) / num_gaps
-        
-        for j in range(1, min(11, sequence_length + 1)):
-            seq_last_sub_clusters[j] = sub_clusters[-j]
-        
-        for i in range(len(sub_clusters) - 1):
-            from_cluster = sub_clusters[i]
-            to_cluster = sub_clusters[i+1]
-            key = (from_cluster, to_cluster)
-            seq_sub_transition_counts[key] = seq_sub_transition_counts.get(key, 0) + 1
-        
-        current_run = 1
-        max_run = 1
-        for j in range(1, len(sub_clusters)):
-            if sub_clusters[j] == sub_clusters[j-1]:
-                current_run += 1
-                max_run = max(max_run, current_run)
-            else:
-                current_run = 1
-        seq_max_sub_cluster_run = max_run
-    
-    seq_mean_unique_factors = np.mean(unique_factors) if len(unique_factors) > 0 else 0.0
-    seq_std_unique_factors = np.std(unique_factors) if len(unique_factors) > 1 else 0.0
-    seq_trend_unique_factors = np.polyfit(np.arange(sequence_length), unique_factors, 1)[0] if len(unique_factors) > 1 else 0.0
-    
-    seq_mod6_freqs = {}
-    if len(gaps) > 0:
-        for i in range(6):
-            seq_mod6_freqs[i] = np.sum((gaps % 6) == i) / len(gaps)
-    
-    seq_mean_factor_density = np.mean(factor_density) if len(factor_density) > 0 else 0.0
-    seq_std_factor_density = np.std(factor_density) if len(factor_density) > 1 else 0.0
-    seq_trend_factor_density = np.polyfit(np.arange(sequence_length), factor_density, 1)[0] if len(factor_density) > 1 else 0.0
-    
-    seq_mean_prime_factor_sum = np.mean(sum_of_prime_factors) if len(sum_of_prime_factors) > 0 else 0.0
-    seq_std_prime_factor_sum = np.std(sum_of_prime_factors) if len(sum_of_prime_factors) > 1 else 0.0
-    seq_trend_prime_factor_sum = np.polyfit(np.arange(sequence_length), sum_of_prime_factors, 1)[0] if len(sum_of_prime_factors) > 1 else 0.0
-    
-    return {
-        'seq_mean_gap': float(seq_mean_gap),
-        'seq_std_gap': float(seq_std_gap),
-        'seq_trend': float(seq_trend),
-        'seq_last_gap': float(seq_last_gap),
-        'seq_cluster_freqs': seq_cluster_freqs,
-        'seq_last_clusters': seq_last_clusters,
-        'seq_sub_cluster_freqs': seq_sub_cluster_freqs,
-        'seq_last_sub_clusters': seq_last_sub_clusters,
-        'seq_sub_transition_counts': seq_sub_transition_counts,
-        'seq_max_sub_cluster_run': int(seq_max_sub_cluster_run),
-        'seq_mean_unique_factors': float(seq_mean_unique_factors),
-        'seq_std_unique_factors': float(seq_std_unique_factors),
-        'seq_trend_unique_factors': float(seq_trend_unique_factors),
-        'seq_mod6_freqs': seq_mod6_freqs,
-        'seq_mean_factor_density': float(seq_mean_factor_density),
-        'seq_std_factor_density': float(seq_std_factor_density),
-        'seq_trend_factor_density': float(seq_trend_factor_density),
-        'seq_mean_prime_factor_sum': float(seq_mean_prime_factor_sum),
-        'seq_std_prime_factor_sum': float(seq_std_prime_factor_sum),
-        'seq_trend_prime_factor_sum': float(seq_trend_prime_factor_sum)
-    }
-
 
 @timing_decorator
 def compute_sequence_features(df, sequence_length=None):
@@ -1860,8 +1867,8 @@ def analyze_gap_patterns(gaps, df=None, max_sequence_length=5, logger=None):
             print(f"Warning: Error in pattern analysis: {str(e)}")
             import traceback
             print(traceback.format_exc())
-            return pattern_analysis 
-
+            return pattern_analysis
+        
 @timing_decorator
 def analyze_primes_and_gaps(n, output_log_file, plot_dir):
     """Main analysis pipeline with enhanced reporting and numerical stability."""
@@ -2146,6 +2153,76 @@ def analyze_primes_and_gaps(n, output_log_file, plot_dir):
                     **analyses
                 }
                 
+                # Check for transfer learning
+                if TRANSFER_LEARNING_ENABLED:
+                    logger.log_and_print("\nPerforming transfer learning...")
+                    try:
+                        # Select best model
+                        best_model_name, best_model = select_best_model(model_results)
+                        if best_model:
+                            # Generate new primes for transfer learning
+                            transfer_primes = generate_primes(n)
+                            transfer_gaps = compute_gaps(transfer_primes)
+                            
+                            # Compute features for transfer learning
+                            transfer_features_list = []
+                            for i in range(len(transfer_gaps)):
+                                transfer_features = compute_advanced_prime_features(
+                                    transfer_primes[i],
+                                    transfer_primes[i + 1],
+                                    transfer_gaps[i]
+                                )
+                                transfer_features['lower_prime'] = transfer_primes[i]
+                                transfer_features['upper_prime'] = transfer_primes[i + 1]
+                                transfer_features_list.append(transfer_features)
+                            
+                            transfer_df = pd.DataFrame(transfer_features_list)
+                            transfer_df = optimize_memory_usage(transfer_df)
+                            
+                            # Create advanced features
+                            transfer_df = create_advanced_features(transfer_df, logger=logger)
+                            
+                            # Prepare data for transfer learning
+                            X_transfer, y_transfer, _, _, _, _, _, _, _ = prepare_training_data(transfer_df)
+                            
+                            # Fine-tune the model
+                            if logger:
+                                logger.log_and_print(f"Fine-tuning model {best_model_name}...")
+                            
+                            fine_tuned_model = fine_tune_model(
+                                best_model,
+                                transfer_df,
+                                feature_cols,
+                                logger=logger
+                            )
+                            
+                            # Make predictions on the new data
+                            if hasattr(fine_tuned_model, 'predict'):
+                                y_transfer_pred = fine_tuned_model.predict(X_transfer)
+                            elif hasattr(fine_tuned_model, 'predict'):
+                                y_transfer_pred = fine_tuned_model.predict(X_transfer)
+                            else:
+                                y_transfer_pred = np.zeros_like(y_transfer)
+                            
+                            # Compute metrics
+                            transfer_mse = mean_squared_error(y_transfer, y_transfer_pred)
+                            transfer_r2 = r2_score(y_transfer, y_transfer_pred)
+                            
+                            model_results[best_model_name]['transfer_learning_results'] = {
+                                'test_mse': float(transfer_mse),
+                                'test_r2': float(transfer_r2)
+                            }
+                            
+                            if logger:
+                                logger.log_and_print(f"Transfer learning complete. Test MSE: {transfer_mse:.4f}, R²: {transfer_r2:.4f}")
+                        else:
+                            if logger:
+                                logger.log_and_print("Warning: No best model found for transfer learning.")
+                    except Exception as e:
+                        if logger:
+                            logger.log_and_print(f"Warning: Transfer learning failed: {str(e)}")
+                        model_results[best_model_name]['transfer_learning_results'] = None
+                
                 logger.log_and_print(f"\nAnalysis completed in {time.time() - overall_start:.2f} seconds")
                 
                 # Write report
@@ -2185,7 +2262,7 @@ def analyze_primes_and_gaps(n, output_log_file, plot_dir):
         except Exception as e:
             logger.log_and_print(f"Critical error in analysis pipeline: {str(e)}", level=logging.ERROR)
             return None
-              
+
 @timing_decorator
 def analyze_primes_and_gaps_large_scale(n, output_log_file, plot_dir, batch_size=100000, analysis_stats=None):
     """Enhanced analysis pipeline for large datasets with error handling."""
@@ -2206,29 +2283,39 @@ def analyze_primes_and_gaps_large_scale(n, output_log_file, plot_dir, batch_size
             if not recovery.save_checkpoint({'dataframe': df}, "after_batch_processing"):
                 logger.log_and_print("Warning: Checkpoint save failed after batch processing.", level=logging.WARNING)
             
+            # Initialize analysis_stats if not provided
+            if analysis_stats is None:
+                analysis_stats = {}
+            
             # Analyze chaos patterns
             logger.log_and_print("Analyzing chaos patterns...")
             chaos_metrics = compute_chaos_metrics(df, feature_cols=['gap_size'], logger=logger)
+            analysis_stats['chaos_metrics'] = chaos_metrics
             
             # Analyze superposition patterns
             logger.log_and_print("Analyzing superposition patterns...")
             superposition_patterns = compute_superposition_patterns(df, feature_cols=['gap_size'], logger=logger)
+            analysis_stats['superposition_patterns'] = superposition_patterns
             
              # Analyze wavelet patterns
             logger.log_and_print("Analyzing wavelet patterns...")
             wavelet_patterns = analyze_wavelet_patterns(df, feature_col='gap_size', logger=logger)
+            analysis_stats['wavelet_patterns'] = wavelet_patterns
             
             # Compute fractal dimension
             logger.log_and_print("Computing fractal dimension...")
             fractal_dimension = compute_fractal_dimension(df, feature_col='gap_size', logger=logger)
+            analysis_stats['fractal_dimension'] = fractal_dimension
             
             # Analyze phase space
             logger.log_and_print("Analyzing phase space...")
             phase_space_analysis = analyze_phase_space(df, feature_col='gap_size', logger=logger)
+            analysis_stats['phase_space_analysis'] = phase_space_analysis
             
             # Create recurrence plot
             logger.log_and_print("Creating recurrence plot...")
             recurrence_plot_data = create_recurrence_plot(df, feature_col='gap_size', logger=logger)
+            analysis_stats['recurrence_plot_data'] = recurrence_plot_data
             
             # Create advanced features
             logger.log_and_print("\nCreating advanced features...")
@@ -2424,7 +2511,8 @@ def analyze_primes_and_gaps_large_scale(n, output_log_file, plot_dir, batch_size
                 print(f"Critical error in analysis: {str(e)}")
                 traceback.print_exc()
             return None
-                                 
+                  
+                                   
 @timing_decorator
 def analyze_gap_distribution_characteristics(df, logger=None):
     """Analyze gap distribution characteristics with improved numerical stability and error handling."""
@@ -2789,13 +2877,22 @@ def analyze_prime_factor_patterns(df, batch_size=5000, logger=None):
                                     factors = window_data['unique_factors'].values.astype(np.float64)
                                     factors = np.clip(factors, -1e10, 1e10)
                                     
-                                    if len(factors) == window:
+                                    if len(factors) > 1:
                                         with np.errstate(all='ignore'):
+                                            # Calculate trend using polyfit
+                                            coeffs = np.polyfit(range(window), factors, 1)
+                                            trend = coeffs[0]
                                             sequence_stats.append({
                                                 'mean': float(np.mean(factors)),
                                                 'std': float(np.std(factors)),
-                                                'trend': float(np.polyfit(range(window), factors, 1)[0])
+                                                'trend': float(trend)
                                             })
+                                    elif len(factors) == 1:
+                                        sequence_stats.append({
+                                            'mean': float(np.mean(factors)),
+                                            'std': 0.0,
+                                            'trend': 0.0
+                                        })
                         
                         gc.collect()
                     
@@ -2878,7 +2975,7 @@ def analyze_prime_factor_patterns(df, batch_size=5000, logger=None):
                     'change_points': {'locations': [], 'values': []}
                 }
             }
-            
+                   
 @njit
 def _analyze_gap_distribution_numba(cluster_gaps, values_for_quantiles):
     """Numba-optimized version of analyze_gap_distribution_characteristics_by_cluster."""
@@ -3906,6 +4003,7 @@ def compute_fractal_dimension(df, feature_col='gap_size', batch_size=5000, logge
         return {'dimension': 0.0, 'counts': {}}                              
 
 @timing_decorator
+@timing_decorator
 def create_advanced_features(df, logger=None, feature_importance=None, chaos_metrics=None, superposition_patterns=None):
     """Create sophisticated features including mathematical, statistical, and domain-specific features."""
     if logger:
@@ -4043,34 +4141,47 @@ def create_advanced_features(df, logger=None, feature_importance=None, chaos_met
             if logger:
                 logger.log_and_print(f"DEBUG: gap_values before FFT: {gap_values}")
             
-            gap_fft = np.array(fft(gap_values))
-            gap_freq = np.array(fftfreq(len(gap_values)))
-            
-            # Debugging: Log the FFT results
-            if logger:
-                logger.log_and_print(f"DEBUG: gap_fft: {gap_fft}")
-                logger.log_and_print(f"DEBUG: gap_freq: {gap_freq}")
-            
-            # Extract frequency domain features
-            # Convert complex FFT values to magnitudes and handle properly
-            fft_magnitudes = np.abs(gap_fft[1:])  # Skip DC component
-            fft_array = np.abs(gap_fft)  # Get magnitudes of all components
-            
-            if len(fft_magnitudes) > 0:
-                main_freq_idx = int(np.argmax(fft_magnitudes))
-                new_features['fft_main_freq'] = float(fft_magnitudes[main_freq_idx])
-                
-                # Handle mean calculation
-                fft_array_mean = np.asarray(fft_array, dtype=np.float64)
-                new_features['fft_mean_magnitude'] = float(np.mean(fft_array_mean))
-                
-                # Handle std calculation
-                fft_array_std = np.asarray(fft_array, dtype=np.float64)
-                new_features['fft_std_magnitude'] = float(np.std(fft_array_std))
-            else:
+            # Check if input is all zeros
+            if np.all(gap_values == 0):
+                if logger:
+                    logger.log_and_print("Warning: Input to FFT is all zeros. Skipping FFT calculation.")
                 new_features['fft_main_freq'] = 0.0
                 new_features['fft_mean_magnitude'] = 0.0
                 new_features['fft_std_magnitude'] = 0.0
+            else:
+                gap_fft = np.array(fft(gap_values))
+                gap_freq = np.array(fftfreq(len(gap_values)))
+                
+                # Debugging: Log the FFT results
+                if logger:
+                    logger.log_and_print(f"DEBUG: gap_fft: {gap_fft}")
+                    logger.log_and_print(f"DEBUG: gap_freq: {gap_freq}")
+                
+                # Extract frequency domain features
+                # Convert complex FFT values to magnitudes and handle properly
+                fft_magnitudes = np.abs(gap_fft[1:])  # Skip DC component
+                fft_array = np.abs(gap_fft)  # Get magnitudes of all components
+                
+                # Filter out negative frequencies
+                positive_freq_mask = gap_freq > 0
+                positive_freqs = gap_freq[positive_freq_mask]
+                positive_magnitudes = fft_magnitudes[positive_freq_mask[1:]]
+                
+                if len(positive_magnitudes) > 0:
+                    main_freq_idx = int(np.argmax(positive_magnitudes))
+                    new_features['fft_main_freq'] = float(positive_magnitudes[main_freq_idx])
+                    
+                    # Handle mean calculation
+                    fft_array_mean = np.asarray(fft_array, dtype=np.float64)
+                    new_features['fft_mean_magnitude'] = float(np.mean(fft_array_mean))
+                    
+                    # Handle std calculation
+                    fft_array_std = np.asarray(fft_array, dtype=np.float64)
+                    new_features['fft_std_magnitude'] = float(np.std(fft_array_std))
+                else:
+                    new_features['fft_main_freq'] = 0.0
+                    new_features['fft_mean_magnitude'] = 0.0
+                    new_features['fft_std_magnitude'] = 0.0
         
         # 7. Pattern-Based Features
         if logger:
@@ -4170,7 +4281,7 @@ def create_advanced_features(df, logger=None, feature_importance=None, chaos_met
             print(f"Error creating advanced features: {str(e)}")
             traceback.print_exc()
         return df
-    
+        
 @timing_decorator
 def perform_clustering(df):
     """Perform clustering on smaller datasets with numerical protection."""
@@ -4534,7 +4645,7 @@ def create_visualizations_large_scale(df, feature_importance, pattern_analysis, 
         print(f"DEBUG: tuple contents: {[type(x) for x in interaction_analysis]}")
         
     # Create subdirectories for different types of plots
-    for subdir in ['distributions', 'correlations', 'clusters', 'models']:
+    for subdir in ['distributions', 'correlations', 'clusters', 'models', 'maps']:
         os.makedirs(os.path.join(plot_dir, subdir), exist_ok=True)
     
     try:
@@ -4666,6 +4777,44 @@ def create_visualizations_large_scale(df, feature_importance, pattern_analysis, 
         else:
             print("Warning: pairwise_correlations is not a dictionary.")
         
+        # 8. Prime Probability Map Visualization
+        if analysis_stats and 'prime_probability_map' in analysis_stats and isinstance(analysis_stats['prime_probability_map'], dict):
+            print("  Creating prime probability map visualization...")
+            prime_map = analysis_stats['prime_probability_map']
+            
+            if prime_map and '_stats' in prime_map and 'actual_primes' in prime_map and 'predicted_primes' in prime_map:
+                # Extract data for plotting
+                actual_primes = prime_map['actual_primes']
+                predicted_primes = prime_map['predicted_primes']
+                
+                # Calculate absolute differences
+                abs_diffs = np.abs(actual_primes - predicted_primes)
+                
+                # Create a histogram of the absolute differences
+                plt.figure(figsize=(12, 6))
+                plt.hist(abs_diffs, bins='auto', density=True, alpha=0.7, label='Absolute Differences')
+                
+                # Calculate and plot the mean absolute difference
+                mean_abs_diff = np.mean(abs_diffs)
+                plt.axvline(mean_abs_diff, color='red', linestyle='dashed', linewidth=1, label=f'Mean Abs Diff: {mean_abs_diff:.2f}')
+                
+                # Calculate and plot the median absolute difference
+                median_abs_diff = np.median(abs_diffs)
+                plt.axvline(median_abs_diff, color='green', linestyle='dashed', linewidth=1, label=f'Median Abs Diff: {median_abs_diff:.2f}')
+                
+                plt.title('Distribution of Absolute Differences Between Predicted and Actual Prime Locations')
+                plt.xlabel('Absolute Difference')
+                plt.ylabel('Density')
+                plt.legend()
+                plt.tight_layout()
+                plt.savefig(os.path.join(plot_dir, 'maps', "prime_probability_map.png"))
+                plt.close()
+                gc.collect()
+            else:
+                print("Warning: No valid prime probability map data available for plotting.")
+        else:
+            print("Warning: No prime probability map data available for plotting.")
+        
     except Exception as e:
         print(f"Warning: Error in visualization creation: {str(e)}")
         import traceback
@@ -4673,7 +4822,7 @@ def create_visualizations_large_scale(df, feature_importance, pattern_analysis, 
     finally:
         plt.close('all')
         gc.collect()
-
+        
 @timing_decorator     
 def create_cluster_distribution_plots(df, plot_dir, batch_size=10000):
     """Create cluster-specific distribution plots with batched processing."""
@@ -4900,7 +5049,7 @@ def compute_shap_values(models, X, feature_cols, n_samples=1000, batch_size=500,
         
         # Return safe default values
         return {}, {}
-    
+      
 @timing_decorator
 def compute_prediction_intervals(model, X, confidence=0.95, n_bootstraps=50, batch_size=5000, logger=None):
     """Compute prediction intervals using bootstrap with improved memory management and numerical stability."""
@@ -5066,8 +5215,8 @@ def compute_prediction_intervals(model, X, confidence=0.95, n_bootstraps=50, bat
             np.zeros(default_size, dtype=np.float64),
             np.zeros(default_size, dtype=np.float64),
             np.zeros(default_size, dtype=np.float64)
-        )
-           
+        )        
+
 @njit
 def _detect_change_points_numba(data, min_size):
     """Numba-optimized function for detecting change points."""
@@ -6007,7 +6156,7 @@ def perform_advanced_statistical_tests(df, advanced_clustering_results, batch_si
             'feature_correlations': {},
             'time_series_tests': {}
         }
-        
+             
 @njit
 def _compute_sample_importance_numba(X, y, feature_cols_count):
     """Numba-optimized function to compute feature importance for a single sample."""
@@ -6217,9 +6366,9 @@ def analyze_feature_importance(df, target_col='gap_size', n_top_features=50, bat
                 
                 if end_idx - start_idx > sample_size:
                     sample_idx = np.random.choice(range(start_idx, end_idx), sample_size, replace=False)
-                    df_sample = df.iloc[sample_idx]
+                    df_sample = df.iloc[sample_idx].sort_index()
                 else:
-                    df_sample = df.iloc[start_idx:end_idx]
+                    df_sample = df.iloc[start_idx:end_idx].sort_index()
                 
                 sample_results = _compute_sample_importance(df_sample, feature_cols, target_col, logger, batch_size)
                 
@@ -6377,7 +6526,7 @@ def analyze_feature_importance(df, target_col='gap_size', n_top_features=50, bat
             'stability_scores': {},
             'interaction_scores': {},
             'shap_scores': {}
-        }, pd.DataFrame()
+        }, pd.DataFrame()     
 
 @timing_decorator
 def select_optimal_features(df, importance_analysis, target_col='gap_size', batch_size=5000, logger=None):
@@ -6494,7 +6643,7 @@ def select_optimal_features(df, importance_analysis, target_col='gap_size', batc
             traceback.print_exc()
         
         # Return safe default values
-        raise ValueError("Feature selection failed, no valid features selected.")   
+        raise ValueError("Feature selection failed, no valid features selected.")
 
 @timing_decorator
 def analyze_feature_stability(df, selected_features, n_bootstrap=50, batch_size=5000, logger=None):
@@ -6611,8 +6760,14 @@ def analyze_feature_stability(df, selected_features, n_bootstrap=50, batch_size=
         else:
             print(error_msg)
             traceback.print_exc()
-        return stability_analysis      
-
+        
+        # Return safe default values
+        return {
+            'bootstrap_scores': {},
+            'temporal_stability': {},
+            'value_range_stability': {}
+        }
+            
 @timing_decorator
 def analyze_phase_space(df, feature_col='gap_size', max_lag=5, batch_size=5000, logger=None):
     """Analyze the phase space of a feature with improved numerical stability and memory management."""
@@ -7300,7 +7455,8 @@ def _write_outlier_analysis(log, df, logger=None):
             outlier_gaps = outlier_gaps.sort_values('gap_size', ascending=False)
             
             for idx, row in outlier_gaps.iterrows():
-                log.write(f"\nOutlier Gap: {row.get('gap_size', 'N/A'):.0f}")
+                gap_size = row.get('gap_size', 'N/A')
+                log.write(f"\nOutlier Gap: {gap_size:.0f} (Gap Size)") # Added clarification here
                 
                 # Find the gaps that precede the outlier gap
                 if idx >= 5:
@@ -7374,7 +7530,7 @@ def _write_outlier_analysis(log, df, logger=None):
             traceback.print_exc()
     
     log.write("\n")
-    
+      
 def prepare_training_data(df, logger=None):
     """Prepare data for model training with revised feature selection and NaN handling."""
     if logger:
@@ -8734,14 +8890,14 @@ def _create_callback_with_float_params(callback_class, monitor, patience, min_de
     """Helper function to create callbacks with float parameters."""
     params = {
         'monitor': monitor,
-        'patience': patience,
+        'patience': int(patience), # Ensure patience is an int
         'restore_best_weights': True,
         'min_delta': float(min_delta)
     }
     if factor is not None:
         params['factor'] = float(factor)
     if min_lr is not None:
-        params['min_lr'] = float(min_lr)
+        params['min_lr'] = int(min_lr) # Ensure min_lr is an int
     if filepath is not None:
         params['filepath'] = filepath
         params['save_best_only'] = save_best_only
@@ -8902,6 +9058,7 @@ def train_single_model(model_config, X_train_scaled, X_test_scaled, y_train, y_t
     try:
         # Extract the actual model from the config
         model = model_config['model']
+        model_name = model_config.get('name', 'unknown')
 
         # Convert DataFrame to numpy array if necessary
         if isinstance(X_train_scaled, pd.DataFrame):
@@ -9020,22 +9177,35 @@ def train_single_model(model_config, X_train_scaled, X_test_scaled, y_train, y_t
         y_pred = np.nan_to_num(y_pred, nan=0.0, posinf=1e10, neginf=-1e10)
         
         # Compute metrics with clean data
-        train_mse = mean_squared_error(
-            np.nan_to_num(y_train, nan=0.0),
-            np.nan_to_num(y_train_pred, nan=0.0)
-        )
-        train_r2 = r2_score(
-            np.nan_to_num(y_train, nan=0.0),
-            np.nan_to_num(y_train_pred, nan=0.0)
-        )
-        test_mse = mean_squared_error(
-            np.nan_to_num(y_test, nan=0.0),
-            np.nan_to_num(y_pred, nan=0.0)
-        )
-        test_r2 = r2_score(
-            np.nan_to_num(y_test, nan=0.0),
-            np.nan_to_num(y_pred, nan=0.0)
-        )
+        y_train_clean = np.nan_to_num(y_train, nan=0.0)
+        y_test_clean = np.nan_to_num(y_test, nan=0.0)
+        
+        train_mse = mean_squared_error(y_train_clean, y_train_pred)
+        train_r2 = r2_score(y_train_clean, y_train_pred)
+        test_mse = mean_squared_error(y_test_clean, y_pred)
+        test_r2 = r2_score(y_test_clean, y_pred)
+        
+        if not np.isfinite(test_r2):
+            print(f"Warning: Test R² is not finite for model {model_name}, setting to 0.")
+            test_r2 = 0.0
+        
+        if not np.isfinite(train_r2):
+            print(f"Warning: Train R² is not finite for model {model_name}, setting to 0.")
+            train_r2 = 0.0
+        
+        if not np.isfinite(test_mse):
+            print(f"Warning: Test MSE is not finite for model {model_name}, setting to inf.")
+            test_mse = float('inf')
+        
+        if not np.isfinite(train_mse):
+            print(f"Warning: Train MSE is not finite for model {model_name}, setting to inf.")
+            train_mse = float('inf')
+        
+        print(f"DEBUG: Model {model_name} - X_train shape: {X_train_array.shape}, y_train shape: {y_train.shape}")
+        print(f"DEBUG: Model {model_name} - X_test shape: {X_test_array.shape}, y_test shape: {y_test.shape}")
+        print(f"DEBUG: Model {model_name} - y_train_pred shape: {y_train_pred.shape}, y_pred shape: {y_pred.shape}")
+        print(f"DEBUG: Model {model_name} - Train MSE: {train_mse:.4f}, R²: {train_r2:.4f}")
+        print(f"DEBUG: Model {model_name} - Test MSE: {test_mse:.4f}, R²: {test_r2:.4f}")
         
         return {
             'model': model,
@@ -9064,7 +9234,7 @@ def train_single_model(model_config, X_train_scaled, X_test_scaled, y_train, y_t
                 'test': np.zeros_like(y_test)
             }
         }
-                              
+        
 def create_stacking_model(feature_cols, base_model_names=None, meta_learner_name='linear_regression', logger=None):
     """Create base models and meta-learner for stacking with improved configuration and error handling."""
     if logger:
@@ -9441,11 +9611,14 @@ def fine_tune_model(model, df_new, feature_cols, learning_rate=0.0001, epochs=20
             traceback.print_exc()
         return model
     
+@timing_decorator
 def prepare_model_data(X, y, cluster_X, cluster_y, gap_cluster_X, gap_cluster_y, 
                       next_cluster_X, next_cluster_y, batch_size=5000, logger=None):
     """Prepare and validate data for model training with improved numerical stability."""
     if logger:
         logger.log_and_print("Preparing model data...")
+    else:
+        print("Preparing model data...")
     
     try:
         # Convert to float64 and clip values
@@ -9497,11 +9670,20 @@ def prepare_model_data(X, y, cluster_X, cluster_y, gap_cluster_X, gap_cluster_y,
             logger.log_and_print("Data preparation complete")
             logger.log_and_print(f"Main data shape: X={X_processed.shape}, y={y_processed.shape}")
             if cluster_data:
-                logger.log_and_print(f"Cluster data shape: X={cluster_data['X'].shape}, y={cluster_data['y'].shape}")
+                logger.log_and_print(f"Cluster membership data shape: X={cluster_data['X'].shape}, y={cluster_data['y'].shape}")
             if gap_data:
-                logger.log_and_print(f"Gap data shape: X={gap_data['X'].shape}, y={gap_data['y'].shape}")
+                logger.log_and_print(f"Gap from cluster data shape: X={gap_data['X'].shape}, y={gap_data['y'].shape}")
             if next_cluster_data:
                 logger.log_and_print(f"Next cluster data shape: X={next_cluster_data['X'].shape}, y={next_cluster_data['y'].shape}")
+        else:
+            print("Data preparation complete")
+            print(f"Main data shape: X={X_processed.shape}, y={y_processed.shape}")
+            if cluster_data:
+                print(f"Cluster membership data shape: X={cluster_data['X'].shape}, y={cluster_data['y'].shape}")
+            if gap_data:
+                print(f"Gap from cluster data shape: X={gap_data['X'].shape}, y={gap_data['y'].shape}")
+            if next_cluster_data:
+                print(f"Next cluster data shape: X={next_cluster_data['X'].shape}, y={next_cluster_data['y'].shape}")
         
         return X_processed, y_processed, cluster_data, gap_data, next_cluster_data
         
@@ -9514,7 +9696,7 @@ def prepare_model_data(X, y, cluster_X, cluster_y, gap_cluster_X, gap_cluster_y,
             print(error_msg)
             traceback.print_exc()
         return None, None, None, None, None
-    
+
 @timing_decorator
 def train_base_models(X, y, feature_cols, batch_size=5000, logger=None):
     """Train individual base models with improved numerical stability and error handling."""
@@ -10494,7 +10676,7 @@ def train_models(X, y, feature_cols, cluster_X, cluster_y,
         # Check if feature_cols is empty
         if not feature_cols:
             if logger:
-                logger.log_and_print("Error: No valid features for training, halting model training.", level=logging.ERROR)
+                logger.log_and_print("Error: No valid features for training, halting model training.", level=logging.WARNING)
             else:
                 print("Error: No valid features for training, halting model training.")
             raise ValueError("No valid features for training, cannot proceed with model training.")
@@ -10571,6 +10753,50 @@ def train_models(X, y, feature_cols, cluster_X, cluster_y,
         # Validate results
         model_results = validate_model_results(model_results, logger=logger)
         
+        # Train and evaluate gap_from_cluster_rf model
+        if gap_data:
+            if logger:
+                logger.log_and_print("Training gap_from_cluster_rf model...")
+            
+            # Train the model
+            gap_model_results = train_single_model(
+                model_config=model_results['gap_from_cluster_rf'],
+                X_train_scaled=gap_data['X'],
+                X_test_scaled=gap_data['X'],
+                y_train=gap_data['y'],
+                y_test=gap_data['y'],
+                is_neural_network=False,
+                fold=None
+            )
+            
+            # Update model results
+            model_results['gap_from_cluster_rf'].update(gap_model_results)
+            
+            if logger:
+                logger.log_and_print(f"gap_from_cluster_rf model - Test R²: {gap_model_results['test_r2']:.4f}, Test MSE: {gap_model_results['test_mse']:.4f}")
+        
+        # Train and evaluate next_cluster_rf model
+        if next_cluster_data:
+            if logger:
+                logger.log_and_print("Training next_cluster_rf model...")
+            
+            # Train the model
+            next_cluster_model_results = train_single_model(
+                model_config=model_results['next_cluster_rf'],
+                X_train_scaled=next_cluster_data['X'],
+                X_test_scaled=next_cluster_data['X'],
+                y_train=next_cluster_data['y'],
+                y_test=next_cluster_data['y'],
+                is_neural_network=False,
+                fold=None
+            )
+            
+            # Update model results
+            model_results['next_cluster_rf'].update(next_cluster_model_results)
+            
+            if logger:
+                logger.log_and_print(f"next_cluster_rf model - Test R²: {next_cluster_model_results['test_r2']:.4f}, Test MSE: {next_cluster_model_results['test_mse']:.4f}")
+        
         if logger:
             logger.log_and_print("Model training complete")
         
@@ -10584,8 +10810,8 @@ def train_models(X, y, feature_cols, cluster_X, cluster_y,
         else:
             print(error_msg)
             traceback.print_exc()
-        raise ValueError("Model training failed, cannot proceed.")
-        
+        raise ValueError("Model training failed, cannot proceed.")    
+
 # Helper functions needed by train_models
 
 def batch_predict(model, X_data, model_type=None, batch_size=5000, logger=None):
@@ -11577,7 +11803,7 @@ def create_recurrence_plot(df, feature_col='gap_size', batch_size=5000, logger=N
 def generate_prime_probability_map(df, model_results, feature_cols, scaler, scaler_next_cluster, 
                                  scaler_gap_cluster, n_primes_to_predict=1000, batch_size=500, logger=None, sample_rate=PRIME_MAP_SAMPLE_RATE):
     """Generates a probability map of prime locations with batched processing and random sampling."""
-    with suppress_overflow_warnings():
+    with suppress_numeric_warnings():
         if 'next_cluster_rf' not in model_results or 'gap_from_cluster_rf' not in model_results:
             if logger:
                 logger.log_and_print("Warning: Required models not found. Cannot generate prime probability map.", level=logging.WARNING)
@@ -11609,6 +11835,11 @@ def generate_prime_probability_map(df, model_results, feature_cols, scaler, scal
             # Generate random prime locations for sampling
             sample_size = int(n_primes_to_predict * sample_rate)
             sampled_primes = np.sort(np.random.uniform(current_prime, current_prime + n_primes_to_predict * 100, sample_size))
+            
+            # Initialize lists to store results
+            predicted_primes = []
+            actual_primes = []
+            probabilities = []
             
             # Process predictions in batches
             for batch_start in range(0, len(sampled_primes), batch_size):
@@ -11671,6 +11902,13 @@ def generate_prime_probability_map(df, model_results, feature_cols, scaler, scal
                             batch_probabilities[i] = float((cluster_proba + gap_proba) / 2)
                             batch_primes[i] = target_prime
                             
+                            # Store predicted prime location
+                            predicted_primes.append(current_prime + predicted_gap)
+                            actual_primes.append(target_prime)
+                            probabilities.append(float(batch_probabilities[i]))
+                            
+                            current_prime += predicted_gap
+                            
                         except Exception as e:
                             if logger:
                                 logger.log_and_print(f"Warning: Error in prediction {i} of batch {batch_start}-{batch_end}: {str(e)}")
@@ -11678,19 +11916,6 @@ def generate_prime_probability_map(df, model_results, feature_cols, scaler, scal
                                 print(f"Warning: Error in prediction {i} of batch {batch_start}-{batch_end}: {str(e)}")
                             batch_probabilities[i] = 0.5  # Default probability on error
                             continue
-                    
-                    # Store batch results with explicit type conversion
-                    for i in range(batch_size_actual):
-                        prime_probability_map[float(batch_primes[i])] = float(batch_probabilities[i])
-                    
-                    # Update cluster history for next batch
-                    cluster_history = current_clusters.astype(np.int32)
-                    
-                    # Progress indicator
-                    if logger and (batch_start // batch_size) % 5 == 0:
-                        logger.log_and_print(f"    Completed {batch_end}/{len(sampled_primes)} predictions")
-                    elif (batch_start // batch_size) % 5 == 0:
-                        print(f"    Completed {batch_end}/{len(sampled_primes)} predictions")
                     
                     # Memory cleanup after each batch
                     gc.collect()
@@ -11702,13 +11927,20 @@ def generate_prime_probability_map(df, model_results, feature_cols, scaler, scal
                         print(f"Warning: Error in batch {batch_start}-{batch_end}: {str(e)}")
                     continue
             
+            # Store results in a dictionary
+            prime_probability_map = {
+                'actual_primes': np.array(actual_primes, dtype=np.float64),
+                'predicted_primes': np.array(predicted_primes, dtype=np.float64),
+                'probabilities': np.array(probabilities, dtype=np.float64)
+            }
+            
             # Compute additional statistics using numpy operations
             try:
-                probabilities = np.array(list(prime_probability_map.values()), dtype=np.float64)
-                primes = np.array(list(prime_probability_map.keys()), dtype=np.float64)
+                probabilities = np.array(probabilities, dtype=np.float64)
+                primes = np.array(actual_primes, dtype=np.float64)
                 
                 stats = {
-                    'total_predictions': int(len(prime_probability_map)),
+                    'total_predictions': int(len(prime_probability_map['actual_primes'])),
                     'mean_probability': float(np.mean(probabilities)),
                     'std_probability': float(np.std(probabilities)),
                     'min_probability': float(np.min(probabilities)),
@@ -11735,7 +11967,7 @@ def generate_prime_probability_map(df, model_results, feature_cols, scaler, scal
                     print(f"  Prediction Range: {stats['prediction_range']['start']} to {stats['prediction_range']['end']}")
                 
                 # Add statistics to the result
-                prime_probability_map['_stats'] = stats
+                prime_probability_map['_stats'] = np.array([stats])
                 
             except Exception as e:
                 if logger:
@@ -11756,8 +11988,8 @@ def generate_prime_probability_map(df, model_results, feature_cols, scaler, scal
             else:
                 print(f"Error in prime probability map generation: {str(e)}")
                 traceback.print_exc()
-            return None
-        
+            return None          
+
 @timing_decorator                             
 def analyze_cluster_transitions(df):
     """Analyze cluster transitions with improved numerical stability."""
@@ -12139,8 +12371,11 @@ def analyze_gap_sequences(df, max_sequence_length=5, batch_size=5000, logger=Non
         }
 
 @timing_decorator
-def analyze_gap_sequences_advanced(df, max_length=5, batch_size=10000, logger=None):
+def analyze_gap_sequences_advanced(df, max_length=None, batch_size=10000, logger=None):
     """Analyze sequences of gaps with improved memory management and numerical stability."""
+    if max_length is None:
+        max_length = SEQUENCE_LENGTH_RANGE[1] # Use the max range if not specified
+    
     with suppress_overflow_warnings():
         sequence_analysis = {
             'basic_patterns': {},
@@ -12153,9 +12388,11 @@ def analyze_gap_sequences_advanced(df, max_length=5, batch_size=10000, logger=No
         try:
             # Convert to numpy arrays for faster processing
             gaps = df['gap_size'].astype(np.float64).values
+            gaps = np.clip(gaps, -1e10, 1e10)
+            gaps = gaps[np.isfinite(gaps)]
             
             # Analyze basic sequence patterns
-            for length in range(2, max_length + 1):
+            for length in range(SEQUENCE_LENGTH_RANGE[0], max_length + 1):
                 if logger:
                     logger.log_and_print(f"Processing sequences of length {length}")
                 
@@ -12187,12 +12424,16 @@ def analyze_gap_sequences_advanced(df, max_length=5, batch_size=10000, logger=No
             for start_idx in range(0, len(gaps) - 1, batch_size):
                 end_idx = min(start_idx + batch_size, len(gaps) - 1)
                 
-                for length in range(2, min(max_length + 1, end_idx - start_idx + 1)):
+                for length in range(SEQUENCE_LENGTH_RANGE[0], min(max_length + 1, end_idx - start_idx + 1)):
                     for i in range(start_idx, end_idx - length + 1):
                         seq = tuple(gaps[i:i+length].astype(int))
                         if seq not in repeating_patterns:
                             repeating_patterns[seq] = 0
                         repeating_patterns[seq] += 1
+                        
+                        # Debugging: Log the identified sequence and its count
+                        if logger:
+                            logger.log_and_print(f"DEBUG: Found repeating sequence: {seq}, count: {repeating_patterns[seq]}")
                 
                 gc.collect()
             
@@ -12242,7 +12483,7 @@ def analyze_gap_sequences_advanced(df, max_length=5, batch_size=10000, logger=No
                     for length in range(2, max_length + 1)
                 },
                 'repeating_patterns': {}
-            }  
+            }
 
 @timing_decorator
 def compute_advanced_sequence_metrics(df, batch_size=5000, logger=None):
@@ -13287,7 +13528,12 @@ def _write_executive_summary(log, model_results, feature_importance, pattern_ana
         if 'avg_test_mse' in model_results.get(best_model_name, {}):
             log.write(f"- The model's average test MSE is {model_results[best_model_name]['avg_test_mse']:.4f}.\n")
         if 'avg_test_r2' in model_results.get(best_model_name, {}):
-            log.write(f"- The model's average test R² is {model_results[best_model_name]['avg_test_r2']:.4f}.\n")
+            r2 = model_results[best_model_name]['avg_test_r2']
+            log.write(f"- The model's average test R² is {r2:.4f}.\n")
+            if r2 > 0.9:
+                log.write("  - A high R² value suggests that the model explains a large proportion of the variance in the test data. However, it's important to note that a high R² does not necessarily mean the model is perfect or that it will generalize well to unseen data. It is also important to consider other metrics such as MSE.\n")
+            elif r2 < 0:
+                log.write("  - A negative R² value indicates that the model performs worse than a simple average prediction. This suggests that the model is not capturing the underlying patterns in the data.\n")
         
         # How well does it generalize?
         if 'test_range_results' in model_results.get(best_model_name, {}):
@@ -13518,7 +13764,7 @@ def _write_executive_summary(log, model_results, feature_importance, pattern_ana
             logger.logger.error(traceback.format_exc())
         else:
             traceback.print_exc()
-                      
+                           
                    
 def _write_hypothesis_analysis(log, model_results, feature_importance, pattern_analysis, df, cluster_sequence_analysis):
     """Writes the hypothesis analysis section of the report."""
@@ -14139,10 +14385,10 @@ def compute_correlation_statistics(df, batch_size=5000, logger=None):
         }
 
 def _write_correlation_insights(log, df, correlation_stats=None, logger=None):
-    """Writes correlation insights using pre-computed statistics with improved error handling."""
+    """Writes correlation insights using pre-computed statistics with improved numerical stability."""
     log.write("\n--- Correlation Insights ---\n")
     
-    if correlation_stats is None or not correlation_stats:
+    if correlation_stats is None or not correlation_stats.get('feature_correlations'):
         log.write("No correlation statistics available.\n")
         return
     
@@ -14173,14 +14419,12 @@ def _write_correlation_insights(log, df, correlation_stats=None, logger=None):
             if 'normality_p' in stats:
                 log.write(f"- Normality P: {stats.get('normality_p', 'N/A'):.4f}\n")
         
-        # Write summary
-        log.write("\n\nCorrelation Analysis Summary:")
-        log.write(f"\n- Total features analyzed: {len(correlation_stats.get('feature_correlations', {}))}")
-        log.write(f"\n- Strong correlations found: {len(correlation_stats.get('strong_correlations', []))}")
-        
+        # Compute summary statistics
         if 'correlation_patterns' in correlation_stats:
             patterns = correlation_stats['correlation_patterns']
-            log.write(f"\n\nCorrelation Patterns:")
+            log.write("\n\nCorrelation Analysis Summary:")
+            log.write(f"\n- Total features analyzed: {len(correlation_stats.get('feature_correlations', {}))}")
+            log.write(f"\n- Strong correlations found: {len(correlation_stats.get('strong_correlations', []))}")
             log.write(f"\n- Mean Correlation: {patterns.get('correlation_distribution', {}).get('mean', 'N/A'):.4f}")
             log.write(f"\n- Std Correlation: {patterns.get('correlation_distribution', {}).get('std', 'N/A'):.4f}")
             log.write(f"\n- Strongest Correlation: {patterns.get('correlation_distribution', {}).get('max', 'N/A'):.4f}")
@@ -14195,8 +14439,8 @@ def _write_correlation_insights(log, df, correlation_stats=None, logger=None):
         else:
             traceback.print_exc()
     
-    log.write("\n")
-     
+    log.write("\n")   
+
 def _write_network_analysis(log, network_analysis, logger=None):
     """Writes the network analysis section of the report."""
     log.write("\n--- Network Analysis ---\n")
@@ -14338,8 +14582,8 @@ def _write_detailed_analysis_section(log, feature_importance=None, feature_selec
             log.write("\n--- SHAP Feature Importance ---\n")
             for model_name, importance_dict in shap_importance.items():
                 log.write(f"\n{model_name.upper()}:\n")
-                for feature, importance in sorted(importance_dict.items(), key=lambda x: abs(x[1]), reverse=True)[:10]:
-                    log.write(f"- {feature}: {float(importance):.4f}\n")
+                for feature, score in sorted(importance_dict.items(), key=lambda x: abs(x[1]), reverse=True)[:10]:
+                    log.write(f"- {feature}: {float(score):.4f}\n")
         
         # Prediction Intervals
         if prediction_intervals:
@@ -14490,8 +14734,8 @@ def _write_detailed_analysis_section(log, feature_importance=None, feature_selec
         else:
             traceback.print_exc()
     
-    log.write("\n=== END OF DETAILED ANALYSIS SECTION ===\n\n")
-    
+    log.write("\n=== END OF DETAILED ANALYSIS SECTION ===\n\n")   
+
 def _write_modular_patterns_to_file(log_file, pattern_analysis):
     """Writes the modular pattern distribution with improved handling for large datasets."""
     with open(log_file, "w") as factor_file:
@@ -14614,7 +14858,7 @@ def _write_progression_analysis(log, pattern_analysis, time_series_analysis=None
                  
 def _write_predictive_model_analysis(log, model_results, logger=None):
     """Writes the predictive model analysis section of the report with improved error handling."""
-    log.write("\n--- Predictive Model ---\n")
+    log.write("\n--- Predictive Model Analysis ---\n")
     
     if not model_results:
         log.write("No model results available for analysis.\n")
@@ -14624,7 +14868,14 @@ def _write_predictive_model_analysis(log, model_results, logger=None):
         for name, results in model_results.items():
             log.write(f"\n{name.upper()} Model Performance:\n")
             if 'avg_test_r2' in results:
-                log.write(f"- Average Test R²: {results['avg_test_r2']:.4f}\n")
+                r2 = results['avg_test_r2']
+                log.write(f"- Average Test R²: {r2:.4f}\n")
+                if r2 > 0.9:
+                    log.write("  - A high R² value suggests that the model explains a large proportion of the variance in the test data. However, it's important to note that a high R² does not necessarily mean the model is perfect or that it will generalize well to unseen data. It is also important to consider other metrics such as MSE.\n")
+                elif r2 < 0:
+                    log.write("  - A negative R² value indicates that the model performs worse than a simple average prediction. This suggests that the model is not capturing the underlying patterns in the data.\n")
+                else:
+                    log.write("  - The R² value indicates the proportion of variance explained by the model. A higher value suggests a better fit to the data.\n")
             if 'avg_test_mse' in results:
                 log.write(f"- Average Test MSE: {results['avg_test_mse']:.4f}\n")
             if 'avg_train_mse' in results:
@@ -14667,7 +14918,7 @@ def _write_predictive_model_analysis(log, model_results, logger=None):
             logger.logger.error(traceback.format_exc())
         else:
             traceback.print_exc()
-                                                        
+                                                                 
 def _write_model_comparison(log, model_results, logger=None):
     """Writes the model comparison section of the report with improved error handling and numerical stability."""
     log.write("\n--- Model Comparison ---\n")
@@ -15892,71 +16143,43 @@ def compute_temporal_pattern_statistics(df, batch_size=10000, logger=None):
             'trends': {}
         }
         
-def _write_temporal_patterns_analysis(log, df, temporal_stats=None):
-    """Writes temporal patterns analysis using pre-computed statistics."""
-    log.write("\n=== TEMPORAL PATTERNS ANALYSIS ===\n")
+def _write_temporal_patterns_analysis(log, temporal_patterns, logger=None):
+    """Writes the temporal patterns analysis section of the report."""
+    log.write("\n--- Time Series Analysis ---\n")
     
-    if temporal_stats is None or not temporal_stats.get('features'):
+    if not temporal_patterns:
         log.write("No temporal pattern statistics available.\n")
         return
     
     try:
-        # Write feature patterns
-        for col, stats in temporal_stats['features'].items():
+        for col, patterns in temporal_patterns.items():
             log.write(f"\nFeature: {col}\n")
-            
-            # Write trend analysis
-            if 'trend' in stats and stats['trend']:
-                trend = stats['trend']
-                log.write("Trend Analysis:\n")
-                log.write(f"- Slope: {trend['slope']:.4e}\n")
-                direction = "increasing" if trend['slope'] > 0 else "decreasing"
-                log.write(f"- Direction: {direction}\n")
-            
-            # Write autocorrelation
-            if stats['autocorr']:
-                log.write("Autocorrelation Analysis:\n")
-                for lag, corr in enumerate(stats['autocorr'], 1):
-                    if abs(corr) > 0.1:  # Only show significant correlations
-                        log.write(f"- Lag {lag}: {corr:.4f}\n")
-            
-            # Write seasonality if detected
-            if 'seasonality' in stats and stats['seasonality']:
-                season = stats['seasonality']
-                if season['strength'] > 0.1:  # Only show if significant
-                    log.write("Seasonality Analysis:\n")
-                    log.write(f"- Period: {season['period']:.1f}\n")
-                    log.write(f"- Strength: {season['strength']:.4f}\n")
-            
-            # Write change statistics
-            if 'changes' in stats and stats['changes']:
-                changes = stats['changes']
-                log.write("Change Statistics:\n")
-                log.write(f"- Mean change: {changes['mean']:.4f}\n")
-                log.write(f"- Positive changes: {changes['positive_pct']:.1f}%\n")
-        
-        # Write sequence patterns
-        if 'sequences' in temporal_stats:
-            log.write("\nSequence Patterns:\n")
-            
-            if 'increasing_runs' in temporal_stats['sequences']:
-                inc = temporal_stats['sequences']['increasing_runs']
-                log.write("\nIncreasing Sequences:\n")
-                log.write(f"- Count: {inc['count']}\n")
-                log.write(f"- Max length: {inc['max_length']}\n")
-                log.write(f"- Average length: {inc['mean_length']:.2f}\n")
-            
-            if 'decreasing_runs' in temporal_stats['sequences']:
-                dec = temporal_stats['sequences']['decreasing_runs']
-                log.write("\nDecreasing Sequences:\n")
-                log.write(f"- Count: {dec['count']}\n")
-                log.write(f"- Max length: {dec['max_length']}\n")
-                log.write(f"- Average length: {dec['mean_length']:.2f}\n")
-        
+            if 'trend' in patterns:
+                log.write("  Trend Analysis:\n")
+                log.write(f"    Slope: {patterns['trend'].get('slope', 'N/A'):.4e}\n")
+                log.write(f"    Intercept: {patterns['trend'].get('intercept', 'N/A'):.4e}\n")
+            if 'seasonality' in patterns:
+                log.write("  Seasonality Analysis:\n")
+                log.write(f"    Strength: {patterns['seasonality'].get('strength', 'N/A'):.4f}\n")
+                log.write(f"    Period: {patterns['seasonality'].get('period', 'N/A'):.4f}\n")
+            if 'autocorrelation' in patterns:
+                log.write("  Autocorrelation (first 5 lags):\n")
+                for i, acf in enumerate(patterns['autocorrelation'][:5], 1):
+                    log.write(f"    Lag {i}: {acf:.4f}\n")
+            if 'change_points' in patterns:
+                log.write("  Change Points:\n")
+                for i, cp in enumerate(patterns['change_points'].get('locations', [])):
+                    log.write(f"    Location {cp}: Value = {patterns['change_points'].get('values', [])[i]:.4f}\n")
+    
     except Exception as e:
-        log.write(f"\nError writing temporal patterns: {str(e)}\n")
-        log.write(traceback.format_exc())
-        
+        log.write(f"Error writing temporal patterns analysis: {str(e)}\n")
+        if logger:
+            logger.logger.error(traceback.format_exc())
+        else:
+            traceback.print_exc()
+    
+    log.write("\n")
+
 def _write_cluster_separation_analysis(log, separation_metrics):
     """Writes cluster separation analysis section."""
     log.write("\n=== CLUSTER SEPARATION ANALYSIS ===\n")
@@ -16000,75 +16223,87 @@ def _write_subcluster_analysis(log, df, cluster_sequence_analysis):
         log.write("No sub-cluster information available.\n")
         return
         
-    # Basic sub-cluster statistics
-    log.write("\nSub-cluster Distribution:\n")
-    sub_cluster_counts = df['sub_cluster'].value_counts()
-    for sub_id, count in sub_cluster_counts.items():
-        percentage = (count / len(df)) * 100
-        log.write(f"Sub-cluster {sub_id}: {count} gaps ({percentage:.2f}%)\n")
-    
-    # Sub-cluster characteristics
-    log.write("\nSub-cluster Characteristics:\n")
-    for sub_id in sorted(df['sub_cluster'].unique()):
-        sub_data = df[df['sub_cluster'] == sub_id]
-        log.write(f"\nSub-cluster {sub_id}:\n")
+    try:
+        # Basic sub-cluster statistics
+        log.write("\nSub-cluster Distribution:\n")
+        sub_cluster_counts = df['sub_cluster'].value_counts()
+        for sub_id, count in sub_cluster_counts.items():
+            percentage = (count / len(df)) * 100
+            log.write(f"Sub-cluster {sub_id}: {count} gaps ({percentage:.2f}%)\n")
         
-        # Gap statistics
-        log.write("  Gap Statistics:\n")
-        log.write(f"  - Mean gap size: {sub_data['gap_size'].mean():.2f}\n")
-        log.write(f"  - Median gap size: {sub_data['gap_size'].median():.2f}\n")
-        log.write(f"  - Std deviation: {sub_data['gap_size'].std():.2f}\n")
+        # Sub-cluster characteristics
+        log.write("\nSub-cluster Characteristics:\n")
+        for sub_id in sorted(df['sub_cluster'].unique()):
+            sub_data = df[df['sub_cluster'] == sub_id]
+            log.write(f"\nSub-cluster {sub_id}:\n")
+            
+            # Gap statistics
+            log.write("  Gap Statistics:\n")
+            log.write(f"  - Mean gap size: {sub_data['gap_size'].mean():.2f}\n")
+            log.write(f"  - Median gap size: {sub_data['gap_size'].median():.2f}\n")
+            log.write(f"  - Std deviation: {sub_data['gap_size'].std():.2f}\n")
+            
+            # Factor patterns
+            if 'unique_factors' in sub_data.columns:
+                log.write("  Factor Patterns:\n")
+                log.write(f"  - Mean unique factors: {sub_data['unique_factors'].mean():.2f}\n")
+                log.write(f"  - Mean total factors: {sub_data['total_factors'].mean():.2f}\n")
+            
+            # Modulo patterns
+            if 'gap_mod6' in sub_data.columns:
+                log.write("  Modulo 6 Pattern:\n")
+                mod6_dist = sub_data['gap_mod6'].value_counts(normalize=True)
+                for mod, freq in mod6_dist.items():
+                    log.write(f"  - Mod 6 = {mod}: {freq*100:.2f}%\n")
         
-        # Factor patterns
-        if 'unique_factors' in sub_data.columns:
-            log.write("  Factor Patterns:\n")
-            log.write(f"  - Mean unique factors: {sub_data['unique_factors'].mean():.2f}\n")
-            log.write(f"  - Mean total factors: {sub_data['total_factors'].mean():.2f}\n")
+        # Sub-cluster transitions
+        log.write("\nSub-cluster Transition Analysis:\n")
+        transitions = pd.crosstab(
+            df['sub_cluster'],
+            df['sub_cluster'].shift(-1),
+            normalize='index'
+        )
         
-        # Modulo patterns
-        if 'gap_mod6' in sub_data.columns:
-            log.write("  Modulo 6 Pattern:\n")
-            mod6_dist = sub_data['gap_mod6'].value_counts(normalize=True)
-            for mod, freq in mod6_dist.items():
-                log.write(f"  - Mod 6 = {mod}: {freq*100:.2f}%\n")
-    
-    # Sub-cluster transitions
-    log.write("\nSub-cluster Transition Analysis:\n")
-    transitions = pd.crosstab(
-        df['sub_cluster'],
-        df['sub_cluster'].shift(-1),
-        normalize='index'
-    )
-    
-    for current in sorted(transitions.index):
-        log.write(f"\nTransitions from sub-cluster {current}:\n")
-        for next_cluster in sorted(transitions.columns):
-            prob = transitions.loc[current, next_cluster]
-            prob_val = float(prob) if isinstance(prob, (int, float, np.number)) and pd.notnull(prob) and not isinstance(prob, complex) else 0.0
-            if prob_val > 0.01:  # Only show significant transitions
-                log.write(f"  To sub-cluster {next_cluster}: {prob_val*100:.2f}%\n")
-    
-    # Sub-cluster sequence patterns
-    log.write("\nSub-cluster Sequence Patterns:\n")
-    
-    # Analyze runs
-    current_sub = None
-    current_run = 0
-    run_lengths = []
-    
-    for sub in df['sub_cluster']:
-        if sub == current_sub:
-            current_run += 1
-        else:
+        for current in sorted(transitions.index):
+            log.write(f"\nTransitions from sub-cluster {current}:\n")
+            for next_cluster in sorted(transitions.columns):
+                prob = transitions.loc[current, next_cluster]
+                prob_val = float(prob) if isinstance(prob, (int, float, np.number)) and pd.notnull(prob) and not isinstance(prob, complex) else 0.0
+                if prob_val > 0.01:  # Only show significant transitions
+                    log.write(f"  To sub-cluster {next_cluster}: {prob_val*100:.2f}%\n")
+        
+        # Sub-cluster sequence patterns
+        log.write("\nSub-cluster Sequence Patterns:\n")
+        
+        # Analyze runs
+        run_lengths = []
+        if 'sub_cluster' in df.columns:
+            current_sub = None
+            current_run = 0
+            for sub in df['sub_cluster']:
+                if sub == current_sub:
+                    current_run += 1
+                else:
+                    if current_run > 0:
+                        run_lengths.append(current_run)
+                    current_sub = sub
+                    current_run = 1
             if current_run > 0:
                 run_lengths.append(current_run)
-            current_sub = sub
-            current_run = 1
+        
+        if run_lengths:
+            log.write(f"Average run length: {np.mean(run_lengths):.2f}\n")
+            log.write(f"Maximum run length: {max(run_lengths)}\n")
+            log.write(f"Most common run lengths: {pd.Series(run_lengths).value_counts().head().to_dict()}\n")
+        
+    except Exception as e:
+        log.write(f"Error writing sub-cluster analysis: {str(e)}\n")
+        if logger:
+            logger.logger.error(traceback.format_exc())
+        else:
+            traceback.print_exc()
     
-    if run_lengths:
-        log.write(f"Average run length: {np.mean(run_lengths):.2f}\n")
-        log.write(f"Maximum run length: {max(run_lengths)}\n")
-        log.write(f"Most common run lengths: {pd.Series(run_lengths).value_counts().head().to_dict()}\n")
+    log.write("\n")
 
 def _write_enhanced_sequence_analysis(log, df, logger=None):
     """Writes the enhanced sequence analysis section of the report with improved error handling."""
@@ -16145,6 +16380,18 @@ def _assemble_report(log_file, model_results, feature_importance, pattern_analys
     
     try:
         with open(log_file, "w", encoding="utf-8") as log:
+            # Add report header and settings
+            log.write("=== PrimeAnalysis Report ===\n")
+            log.write(f"Report generated on: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            log.write(f"Analysis settings:\n")
+            log.write(f"  - N (Number of primes): {N}\n")
+            log.write(f"  - BATCH_THRESHOLD: {BATCH_THRESHOLD}\n")
+            log.write(f"  - COMPOSITE_SAMPLE_RATE: {COMPOSITE_SAMPLE_RATE}\n")
+            log.write(f"  - PRIME_MAP_SAMPLE_RATE: {PRIME_MAP_SAMPLE_RATE}\n")
+            log.write(f"  - TRANSFER_LEARNING_ENABLED: {TRANSFER_LEARNING_ENABLED}\n")
+            log.write(f"  - SEQUENCE_LENGTH_RANGE: {SEQUENCE_LENGTH_RANGE}\n")
+            log.write("\n")
+            
             if logger:
                 logger.log_and_print("Writing executive summary...")
             _write_executive_summary(log, model_results, feature_importance, pattern_analysis, df, cluster_sequence_analysis,
@@ -16250,8 +16497,8 @@ def _assemble_report(log_file, model_results, feature_importance, pattern_analys
         if logger:
             logger.logger.error(traceback.format_exc())
         else:
-            traceback.print_exc()
-            
+            traceback.print_exc()           
+
 def _write_advanced_analysis_report(log_file, df, cluster_features, temporal_patterns, separation_metrics, logger=None):
     """Write advanced analysis report with improved numerical handling and error handling."""
     if logger:
@@ -16344,6 +16591,18 @@ def _write_analysis_report(log_file, model_results, feature_importance, pattern_
     
     try:
         with open(log_file, "w", encoding="utf-8") as log:
+            # Add report header and settings
+            log.write("=== PrimeAnalysis Report ===\n")
+            log.write(f"Report generated on: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            log.write(f"Analysis settings:\n")
+            log.write(f"  - N (Number of primes): {N}\n")
+            log.write(f"  - BATCH_THRESHOLD: {BATCH_THRESHOLD}\n")
+            log.write(f"  - COMPOSITE_SAMPLE_RATE: {COMPOSITE_SAMPLE_RATE}\n")
+            log.write(f"  - PRIME_MAP_SAMPLE_RATE: {PRIME_MAP_SAMPLE_RATE}\n")
+            log.write(f"  - TRANSFER_LEARNING_ENABLED: {TRANSFER_LEARNING_ENABLED}\n")
+            log.write(f"  - SEQUENCE_LENGTH_RANGE: {SEQUENCE_LENGTH_RANGE}\n")
+            log.write("\n")
+            
             if logger:
                 logger.log_and_print("Writing executive summary...")
             _write_executive_summary(log, model_results, feature_importance, pattern_analysis, df, cluster_sequence_analysis,
@@ -16450,7 +16709,7 @@ def _write_analysis_report(log_file, model_results, feature_importance, pattern_
             logger.logger.error(traceback.format_exc())
         else:
             traceback.print_exc()
-               
+
 def write_analysis_report(log_file, model_results, feature_importance, pattern_analysis, df, 
                          prime_probability_map=None, cluster_sequence_analysis=None,
                          gap_distribution=None, gap_sequences=None, factor_patterns=None,
